@@ -8,7 +8,7 @@ export interface PluginOptions {
     /**
      * Whether to review create/update/delete actions. You can pass functions here as well for more complex logic.
      */
-    shouldReview: boolean | ((resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>);
+    shouldReview: boolean | ((resource: AdminForthResource, action: AllowedForReviewActionsEnum, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>);
 
     /**
      * Column names mapping in the diff table.
@@ -24,8 +24,14 @@ export interface PluginOptions {
     }
 }
 
+export enum AllowedForReviewActionsEnum {
+    create = AllowedActionsEnum.create,
+    edit = AllowedActionsEnum.edit,
+    delete = AllowedActionsEnum.delete
+}
+
 export enum ApprovalStatusEnum {
-    PENDING = 'pending',
-    APPROVED = 'approved',
-    REJECTED = 'rejected'
+    pending = 'pending',
+    approved = 'approved',
+    rejected = 'rejected'
 }

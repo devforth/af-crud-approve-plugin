@@ -169,7 +169,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     const record = {
       [this.options.resourceColumns.resourceIdColumnName]: resource.resourceId,
       [this.options.resourceColumns.resourceActionColumnName]: action,
-      [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.PENDING,
+      [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.pending,
       [this.options.resourceColumns.resourceDataColumnName]: { 'oldRecord': oldRecord || {}, 'newRecord': newRecord },
       [this.options.resourceColumns.resourceUserIdColumnName]: user.pk,
       [this.options.resourceColumns.resourceRecordIdColumnName]: recordId,
