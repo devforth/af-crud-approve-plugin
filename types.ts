@@ -14,9 +14,9 @@ export interface PluginOptions {
     
     resourceColumns: {
         resourceIdColumnName: string;
+        resourceRecordIdColumnName: string;
         resourceActionColumnName: string;
-        resourceOldDataColumnName: string;
-        resourceNewDataColumnName: string;
+        resourceDataColumnName: string;
         resourceUserIdColumnName: string;
         resourceStatusColumnName: string;
         resourceCreatedAtColumnName: string;

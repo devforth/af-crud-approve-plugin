@@ -1,11 +1,15 @@
-import { AdminForthPlugin } from "adminforth";
-import { IAdminForth, IHttpServer, AdminForthResourcePages, AdminForthResourceColumn, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
+import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections } from "adminforth";
+import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { ApprovalStatusEnum, type PluginOptions } from './types.js';
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 
 
 export default class CRUDApprovePlugin extends AdminForthPlugin {
   options: PluginOptions;
   adminforth: IAdminForth;
+  diffResource: AdminForthResource;
 
   constructor(options: PluginOptions) {
     super(options, import.meta.url);
@@ -21,49 +25,184 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     if (!diffResourceData) {
       throw new Error(`Diff table ${this.options.diffTableName} not found in resources`);
     }
+    this.diffResource = diffResourceData;
 
-    resourceConfig.hooks.create.beforeSave.push(async ({ resource, record, adminUser, extra }) => {
+
+    if (this.options.diffTableName === resourceConfig.resourceId) {
+      let diffColumn = resourceConfig.columns.find((c) => c.name === this.options.resourceColumns.resourceDataColumnName); 
+      if (!diffColumn) {
+        throw new Error(`Column ${this.options.resourceColumns.resourceDataColumnName} not found in ${resourceConfig.label}`)
+      }
+      if (diffColumn.type !== AdminForthDataTypes.JSON) {
+        throw new Error(`Column ${this.options.resourceColumns.resourceDataColumnName} must be of type 'json'`)
+      }
+    
+      diffColumn.showIn = {
+        show: true,
+        list: false,
+        edit: false,
+        create: false,
+        filter: false,
+      };
+      diffColumn.components = {
+        show: { 
+          file: this.componentPath('DiffView.vue'),
+          meta: {
+            ...this.options, 
+            pluginInstanceId: this.pluginInstanceId
+          }
+        }
+      }
+      resourceConfig.options.defaultSort = {
+        columnName: this.options.resourceColumns.resourceCreatedAtColumnName,
+        direction: AdminForthSortDirections.desc
+      }
+    }    
+    
+    if (this.options.diffTableName === resourceConfig.resourceId) {
+      console.log('Skipping log record creation for diff resource itself', resourceConfig.resourceId, this.options.diffTableName);
+      return {ok: true};
+    }
+
+    resourceConfig.hooks.create.beforeSave.unshift(async ({ resource, record, adminUser, extra }) => {
       // intercept create action and create approval request instead
       console.log('Intercepting create action for resource:', resource.resourceId);
-      await this.createApprovalRequest(resource, AllowedActionsEnum.create, null, record, adminUser, extra);
+      await this.createLogRecord(resource, AllowedActionsEnum.create, record, adminUser, null, extra);
       // prevent actual creation
       throw new Error('Changes sent for approval');
     });
 
-    resourceConfig.hooks.edit.afterSave.push(async ({ resource, updates, adminUser, oldRecord, extra }) => {
+    resourceConfig.hooks.edit.afterSave.unshift(async ({ resource, updates, adminUser, oldRecord, extra }) => {
       // intercept update action and create approval request instead
       console.log('Intercepting update action for resource:', resource.resourceId);
-      await this.createApprovalRequest(resource, AllowedActionsEnum.edit, oldRecord, updates, adminUser, extra);
+      await this.createLogRecord(resource, AllowedActionsEnum.edit, updates, adminUser, oldRecord, extra);
       // prevent actual update
       throw new Error('Changes sent for approval');
     });
 
-    resourceConfig.hooks.delete.afterSave.push(async ({ resource, record, adminUser, extra }) => {
+    resourceConfig.hooks.delete.afterSave.unshift(async ({ resource, record, adminUser, extra }) => {
       // intercept delete action and create approval request instead
       console.log('Intercepting delete action for resource:', resource.resourceId);
-      await this.createApprovalRequest(resource, AllowedActionsEnum.delete, record, null, adminUser, extra);
+      await this.createLogRecord(resource, AllowedActionsEnum.delete, record, adminUser, null, extra);
       // prevent actual deletion
       throw new Error('Changes sent for approval');
     });
 
   }
 
-  async createApprovalRequest(resource: AdminForthResource, action: AllowedActionsEnum, oldData: any, newData: any, user: AdminUser, extra?: HttpExtra) {
-    // create a record in diff table with oldData and newData
-    const pkColumnName = this.options.resourceColumns.resourceIdColumnName 
-    const record = {
-      [this.options.resourceColumns.resourceIdColumnName]: oldData ? oldData[pkColumnName] : newData[pkColumnName],
-      [this.options.resourceColumns.resourceActionColumnName]: action,
-      [this.options.resourceColumns.resourceOldDataColumnName]: oldData ? JSON.stringify(oldData) : null,
-      [this.options.resourceColumns.resourceNewDataColumnName]: newData ? JSON.stringify(newData) : null,
-      [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.PENDING,
-      [this.options.resourceColumns.resourceCreatedAtColumnName]: new Date().toISOString(),
-      // You can add userId from extra if you have authentication implemented
-      [this.options.resourceColumns.resourceUserIdColumnName]: user.pk,
+  createLogRecord = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => {
+    const recordIdFieldName = resource.columns.find((c) => c.primaryKey === true)?.name;
+    const recordId = data?.[recordIdFieldName] || oldRecord?.[recordIdFieldName];
+    const connector = this.adminforth.connectors[resource.dataSource];
+
+    const newRecord = action == AllowedActionsEnum.delete ? {} : (await connector.getRecordByPrimaryKey(resource, recordId)) || {};
+    if (action !== AllowedActionsEnum.delete) {
+      oldRecord = oldRecord ? JSON.parse(JSON.stringify(oldRecord)) : {};
+    } else {
+      oldRecord = data
     }
-    const approvalResource = this.adminforth.config.resources.find(r => r.resourceId === this.options.diffTableName);
-    const result = await this.adminforth.createResourceRecord({ resource: approvalResource, record, adminUser: user });
-    return result;
+
+    if (action !== AllowedActionsEnum.delete) {
+        const columnsNamesList = resource.columns.map((c) => c.name);
+        columnsNamesList.forEach((key) => {
+            if (JSON.stringify(oldRecord[key]) == JSON.stringify(newRecord[key])) {
+                delete oldRecord[key];
+                delete newRecord[key];
+            }
+        });
+    }
+
+    const checks = await Promise.all(
+      resource.columns.map(async (c) => {
+        if (typeof c.backendOnly === "function") {
+          const result = await c.backendOnly({
+            adminUser: user,
+            resource,
+            meta: {},
+            source: ActionCheckSource.ShowRequest,
+            adminforth: this.adminforth,
+          });
+          return { col: c, result };
+        }
+        return { col: c, result: c.backendOnly ?? false };
+      })
+    );
+
+    const backendOnlyColumns = checks
+      .filter(({ result }) => result === true)
+      .map(({ col }) => col);
+    
+    backendOnlyColumns.forEach((c) => {
+        if (JSON.stringify(oldRecord[c.name]) != JSON.stringify(newRecord[c.name])) {
+            if (action !== AllowedActionsEnum.delete) {
+                newRecord[c.name] = '<hidden value after>'
+            }
+            if (action !== AllowedActionsEnum.create) {
+                oldRecord[c.name] = '<hidden value before>'
+            }
+        } else {
+            delete oldRecord[c.name];
+            delete newRecord[c.name];
+        }
+    });
+
+    const record = {
+      [this.options.resourceColumns.resourceIdColumnName]: resource.resourceId,
+      [this.options.resourceColumns.resourceActionColumnName]: action,
+      [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.PENDING,
+      [this.options.resourceColumns.resourceDataColumnName]: { 'oldRecord': oldRecord || {}, 'newRecord': newRecord },
+      [this.options.resourceColumns.resourceUserIdColumnName]: user.pk,
+      [this.options.resourceColumns.resourceRecordIdColumnName]: recordId,
+      // utc iso string
+      [this.options.resourceColumns.resourceCreatedAtColumnName]: dayjs.utc().format(),
+    }
+    const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
+    await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
+    return {ok: true};
+  }
+
+  /**
+   * Create a custom action in the audit log resource
+   * @param resourceId - The resourceId of the resource that the action is being performed on. Can be null if the action is not related to a specific resource.
+   * @param recordId - The recordId of the record that the action is being performed on. Can be null if the action is not related to a specific record.
+   * @param actionId - The id of the action being performed, can be random string
+   * @param data - The data to be stored in the audit log
+   * @param user - The adminUser user performing the action
+   */
+  logCustomAction = async (params: {
+      resourceId: string | null, 
+      recordId: string | null,
+      actionId: string,
+      oldData: Object | null,
+      data: Object,
+      user: AdminUser,
+      headers?: Record<string, string>
+  }) => {
+      const { resourceId, recordId, actionId, oldData, data, user, headers } = params;
+
+      // if type of params is not object, throw error
+      if (typeof params !== 'object') {
+        throw new Error('params must be an object, please check AdminFoirth AuditLog custom action documentation')
+      }
+    
+    if (resourceId) {
+      const resource = this.adminforth.config.resources.find((r) => r.resourceId === resourceId);
+      if (!resource) {
+        const similarResource = this.adminforth.config.resources.find((r) => r.resourceId.includes(resourceId));
+        throw new Error(`Resource ${resourceId} not found. Did you mean ${similarResource.resourceId}?`)
+      }
+    }
+
+    const record = {
+      [this.options.resourceColumns.resourceIdColumnName]: resourceId,
+      [this.options.resourceColumns.resourceActionColumnName]: actionId,
+      [this.options.resourceColumns.resourceDataColumnName]: { 'oldRecord': oldData || {}, 'newRecord': data },
+      [this.options.resourceColumns.resourceUserIdColumnName]: user.pk,
+      [this.options.resourceColumns.resourceIdColumnName]: recordId,
+      [this.options.resourceColumns.resourceCreatedAtColumnName]: dayjs.utc().format(),
+    }
+    const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
+    await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
   }
   
   validateConfigAfterDiscover(adminforth: IAdminForth, resourceConfig: AdminForthResource) {

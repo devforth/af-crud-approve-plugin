@@ -9,5 +9,10 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {
+    "@git-diff-view/file": "^0.0.35",
+    "@git-diff-view/vue": "^0.0.35",
+    "dayjs": "^1.11.19"
+  }
 }
