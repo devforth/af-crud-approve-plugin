@@ -1,17 +1,18 @@
+import { AdminForthResource, AdminUser, AllowedActionsEnum, HttpExtra } from "adminforth";
+
 export interface PluginOptions {
     /**
      * Table where diffs are stored.
      */
     diffTableName: string;
     /**
-     * Roles allowed to approve/reject changes.
+     * Whether to review create/update/delete actions. You can pass functions here as well for more complex logic.
      */
-    allowedRoles?: string[];
+    shouldReview: boolean | ((resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>);
+
     /**
-     * Users allowed to approve/reject changes.
+     * Column names mapping in the diff table.
      */
-    allowedUsers?: string[];
-    
     resourceColumns: {
         resourceIdColumnName: string;
         resourceRecordIdColumnName: string;

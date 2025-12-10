@@ -8,6 +8,8 @@ dayjs.extend(utc);
 
 export default class CRUDApprovePlugin extends AdminForthPlugin {
   options: PluginOptions;
+   // make sure plugin is activated later than other plugins
+  activationOrder: number = 9999999;
   adminforth: IAdminForth;
   diffResource: AdminForthResource;
 
@@ -60,37 +62,55 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     }    
     
     if (this.options.diffTableName === resourceConfig.resourceId) {
-      console.log('Skipping log record creation for diff resource itself', resourceConfig.resourceId, this.options.diffTableName);
       return {ok: true};
     }
 
     resourceConfig.hooks.create.beforeSave.unshift(async ({ resource, record, adminUser, extra }) => {
       // intercept create action and create approval request instead
-      console.log('Intercepting create action for resource:', resource.resourceId);
-      await this.createLogRecord(resource, AllowedActionsEnum.create, record, adminUser, null, extra);
+      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.create, record, adminUser, null, extra);
+      if (!res) {
+        return {ok: true};
+      }
       // prevent actual creation
-      throw new Error('Changes sent for approval');
+      return {ok: false, error: 'Creation pending approval' };
     });
 
     resourceConfig.hooks.edit.afterSave.unshift(async ({ resource, updates, adminUser, oldRecord, extra }) => {
       // intercept update action and create approval request instead
-      console.log('Intercepting update action for resource:', resource.resourceId);
-      await this.createLogRecord(resource, AllowedActionsEnum.edit, updates, adminUser, oldRecord, extra);
+      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.edit, updates, adminUser, oldRecord, extra);
+      if (!res) {
+        return {ok: true};
+      }
       // prevent actual update
-      throw new Error('Changes sent for approval');
+      return {ok: false, error: 'Update pending approval' };
     });
 
     resourceConfig.hooks.delete.afterSave.unshift(async ({ resource, record, adminUser, extra }) => {
       // intercept delete action and create approval request instead
-      console.log('Intercepting delete action for resource:', resource.resourceId);
-      await this.createLogRecord(resource, AllowedActionsEnum.delete, record, adminUser, null, extra);
+      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.delete, record, adminUser, null, extra);
+      if (!res) {
+        return {ok: true};
+      }
       // prevent actual deletion
-      throw new Error('Changes sent for approval');
+      return {ok: false, error: 'Deletion pending approval' };
     });
 
   }
 
-  createLogRecord = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => {
+  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => {
+    if (this.options.shouldReview !== false) {
+      let shouldReviewFunc: (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>;
+      if (typeof this.options.shouldReview === 'function') {
+        shouldReviewFunc = this.options.shouldReview;
+      } else {
+        shouldReviewFunc = async () => true;
+      }
+      const shouldReview = await shouldReviewFunc(resource, action, data, user, oldRecord, extra);
+      if (!shouldReview) {
+        return false;
+      }
+    }
+  
     const recordIdFieldName = resource.columns.find((c) => c.primaryKey === true)?.name;
     const recordId = data?.[recordIdFieldName] || oldRecord?.[recordIdFieldName];
     const connector = this.adminforth.connectors[resource.dataSource];
@@ -103,13 +123,13 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     }
 
     if (action !== AllowedActionsEnum.delete) {
-        const columnsNamesList = resource.columns.map((c) => c.name);
-        columnsNamesList.forEach((key) => {
-            if (JSON.stringify(oldRecord[key]) == JSON.stringify(newRecord[key])) {
-                delete oldRecord[key];
-                delete newRecord[key];
-            }
-        });
+      const columnsNamesList = resource.columns.map((c) => c.name);
+      columnsNamesList.forEach((key) => {
+        if (JSON.stringify(oldRecord[key]) == JSON.stringify(newRecord[key])) {
+          delete oldRecord[key];
+          delete newRecord[key];
+        }
+      });
     }
 
     const checks = await Promise.all(
@@ -134,15 +154,15 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     
     backendOnlyColumns.forEach((c) => {
         if (JSON.stringify(oldRecord[c.name]) != JSON.stringify(newRecord[c.name])) {
-            if (action !== AllowedActionsEnum.delete) {
-                newRecord[c.name] = '<hidden value after>'
-            }
-            if (action !== AllowedActionsEnum.create) {
-                oldRecord[c.name] = '<hidden value before>'
-            }
+          if (action !== AllowedActionsEnum.delete) {
+            newRecord[c.name] = '<hidden value after>'
+          }
+          if (action !== AllowedActionsEnum.create) {
+            oldRecord[c.name] = '<hidden value before>'
+          }
         } else {
-            delete oldRecord[c.name];
-            delete newRecord[c.name];
+          delete oldRecord[c.name];
+          delete newRecord[c.name];
         }
     });
 
@@ -158,7 +178,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     }
     const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
     await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
-    return {ok: true};
+    return true
   }
 
   /**
