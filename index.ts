@@ -1,4 +1,4 @@
-import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections } from "adminforth";
+import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IHttpServer } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { ApprovalStatusEnum, type PluginOptions } from './types.js';
 import dayjs from "dayjs";
@@ -233,5 +233,54 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     // optional method to return unique string representation of plugin instance. 
     // Needed if plugin can have multiple instances on one resource 
     return `single`;
+  }
+
+  setupEndpoints(server: IHttpServer): void {
+    server.endpoint({
+      method: 'POST',
+      path: `/plugin/crud-approve/update-status`,
+      noAuth: true,
+      handler: async ({ body, adminUser, response, cookies  }) => {
+        let authCookie;
+        for (const i in cookies) {
+          if (cookies[i].key === `adminforth_${this.adminforth.config.customization.brandNameSlug}_jwt`) {
+            authCookie = cookies[i].value;
+          }
+        }
+        const authRes = await this.adminforth.auth.verify(authCookie, 'auth', true);
+        const username = authRes.username;
+        const userRole = authRes.dbUser.role;
+        if (!this.options.allowedUserNames?.includes(username) && !this.options.allowedUserRoles?.includes(userRole)) {
+          response.status = 403;
+          return { error: 'You are not allowed to perform this action' };
+        }
+        
+        const { resourceId, recordId, approved } = body;
+        const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
+          Filters.EQ(this.options.resourceColumns.resourceIdColumnName, recordId),
+        )
+        if (!diffRecord) {
+          response.status = 404;
+          return { error: 'Diff record not found' };
+        }
+
+        const responserId = authRes.pk;
+        if (approved === false) {
+          // update status to rejected
+          console.log('authRes', authRes);
+          const r = await this.adminforth.updateResourceRecord({
+            resource: this.diffResource,
+            recordId: recordId,
+            updates: {
+              [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.rejected,
+              [this.options.resourceColumns.resourceResponserIdColumnName]: responserId,
+            },
+            adminUser: authRes,
+            oldRecord: diffRecord,
+          });
+          return { ok: true };
+        }
+      }
+    })
   }
 }
