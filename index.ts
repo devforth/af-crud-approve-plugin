@@ -8,7 +8,7 @@ dayjs.extend(utc);
 
 export default class CRUDApprovePlugin extends AdminForthPlugin {
   options: PluginOptions;
-   // make sure plugin is activated later than other plugins
+  // make sure plugin is activated later than other plugins
   activationOrder: number = 9999999;
   adminforth: IAdminForth;
   diffResource: AdminForthResource;
@@ -75,7 +75,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       return {ok: false, error: 'Creation pending approval' };
     });
 
-    resourceConfig.hooks.edit.afterSave.unshift(async ({ resource, updates, adminUser, oldRecord, extra }) => {
+    resourceConfig.hooks.edit.beforeSave.unshift(async ({ resource, updates, adminUser, oldRecord, extra }) => {
       // intercept update action and create approval request instead
       const res = await this.createApprovalRequest(resource, AllowedActionsEnum.edit, updates, adminUser, oldRecord, extra);
       if (!res) {
@@ -85,7 +85,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       return {ok: false, error: 'Update pending approval' };
     });
 
-    resourceConfig.hooks.delete.afterSave.unshift(async ({ resource, record, adminUser, extra }) => {
+    resourceConfig.hooks.delete.beforeSave.unshift(async ({ resource, record, adminUser, extra }) => {
       // intercept delete action and create approval request instead
       const res = await this.createApprovalRequest(resource, AllowedActionsEnum.delete, record, adminUser, null, extra);
       if (!res) {
@@ -94,10 +94,9 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       // prevent actual deletion
       return {ok: false, error: 'Deletion pending approval' };
     });
-
   }
 
-  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => {
+  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra) => {
     if (this.options.shouldReview !== false) {
       let shouldReviewFunc: (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>;
       if (typeof this.options.shouldReview === 'function') {
@@ -113,23 +112,19 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
   
     const recordIdFieldName = resource.columns.find((c) => c.primaryKey === true)?.name;
     const recordId = data?.[recordIdFieldName] || oldRecord?.[recordIdFieldName];
+
+    let newRecord = {};
     const connector = this.adminforth.connectors[resource.dataSource];
-
-    const newRecord = action == AllowedActionsEnum.delete ? {} : (await connector.getRecordByPrimaryKey(resource, recordId)) || {};
-    if (action !== AllowedActionsEnum.delete) {
-      oldRecord = oldRecord ? JSON.parse(JSON.stringify(oldRecord)) : {};
-    } else {
-      oldRecord = data
-    }
-
-    if (action !== AllowedActionsEnum.delete) {
-      const columnsNamesList = resource.columns.map((c) => c.name);
-      columnsNamesList.forEach((key) => {
-        if (JSON.stringify(oldRecord[key]) == JSON.stringify(newRecord[key])) {
-          delete oldRecord[key];
-          delete newRecord[key];
-        }
-      });
+    if (action === AllowedActionsEnum.edit) {
+      newRecord = await connector.getRecordByPrimaryKey(resource, recordId);
+      for (const key in updates.body.record) {
+        newRecord[key] = updates.body.record[key];
+      }
+    } else if (action === AllowedActionsEnum.create) {
+      oldRecord = {};
+      newRecord = updates.body.record;
+    } else if (action === AllowedActionsEnum.delete) {
+      oldRecord = await connector.getRecordByPrimaryKey(resource, recordId);
     }
 
     const checks = await Promise.all(
@@ -153,24 +148,33 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       .map(({ col }) => col);
     
     backendOnlyColumns.forEach((c) => {
-        if (JSON.stringify(oldRecord[c.name]) != JSON.stringify(newRecord[c.name])) {
-          if (action !== AllowedActionsEnum.delete) {
-            newRecord[c.name] = '<hidden value after>'
-          }
-          if (action !== AllowedActionsEnum.create) {
-            oldRecord[c.name] = '<hidden value before>'
-          }
-        } else {
-          delete oldRecord[c.name];
-          delete newRecord[c.name];
+      if (JSON.stringify(oldRecord[c.name]) != JSON.stringify(newRecord[c.name])) {
+        if (action !== AllowedActionsEnum.delete) {
+          newRecord[c.name] = '<hidden value after>'
         }
+        if (action !== AllowedActionsEnum.create) {
+          oldRecord[c.name] = '<hidden value before>'
+        }
+      } else {
+        delete oldRecord[c.name];
+        delete newRecord[c.name];
+      }
     });
+
+    if (action === AllowedActionsEnum.edit) {
+      for (const key in oldRecord) {
+        if (JSON.stringify(oldRecord[key]) === JSON.stringify(newRecord[key])) {
+          delete oldRecord[key];
+          delete newRecord[key];
+        }
+      }
+    }
 
     const record = {
       [this.options.resourceColumns.resourceIdColumnName]: resource.resourceId,
       [this.options.resourceColumns.resourceActionColumnName]: action,
       [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.pending,
-      [this.options.resourceColumns.resourceDataColumnName]: { 'oldRecord': oldRecord || {}, 'newRecord': newRecord },
+      [this.options.resourceColumns.resourceDataColumnName]: { 'oldRecord': oldRecord, 'newRecord': newRecord },
       [this.options.resourceColumns.resourceUserIdColumnName]: user.pk,
       [this.options.resourceColumns.resourceRecordIdColumnName]: recordId,
       // utc iso string
@@ -255,7 +259,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           return { error: 'You are not allowed to perform this action' };
         }
         
-        const { resourceId, recordId, approved } = body;
+        const { resourceId, recordId, action, approved } = body;
         const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
           Filters.EQ(this.options.resourceColumns.resourceIdColumnName, recordId),
         )
@@ -265,21 +269,50 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         }
 
         const responserId = authRes.pk;
-        if (approved === false) {
-          // update status to rejected
-          console.log('authRes', authRes);
-          const r = await this.adminforth.updateResourceRecord({
-            resource: this.diffResource,
-            recordId: recordId,
-            updates: {
-              [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.rejected,
-              [this.options.resourceColumns.resourceResponserIdColumnName]: responserId,
-            },
-            adminUser: authRes,
-            oldRecord: diffRecord,
-          });
-          return { ok: true };
+        const newDiffRecordStatus = approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected;
+        
+        if (approved === true) {
+          const resource = this.adminforth.config.resources.find((res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]);
+          const diffData = diffRecord[this.options.resourceColumns.resourceDataColumnName];
+          let recordUpdateResult;
+          if (action === AllowedActionsEnum.create) {
+            recordUpdateResult = await this.adminforth.createResourceRecord({
+              resource: resource, record: diffData['newRecord'], adminUser: authRes
+            });
+          } else {
+            const targetRecordId = diffRecord[this.options.resourceColumns.resourceRecordIdColumnName];
+            if (action === AllowedActionsEnum.edit) {
+              recordUpdateResult = await this.adminforth.updateResourceRecord({
+                resource: resource, recordId: targetRecordId, updates: diffData['newRecord'],
+                adminUser: authRes, oldRecord: diffData['oldRecord'],
+              });
+            } else if (action === AllowedActionsEnum.delete) {
+              recordUpdateResult = await this.adminforth.deleteResourceRecord({
+                resource: resource, recordId: targetRecordId, adminUser: authRes,
+                record: diffData['oldRecord']
+              });
+            }
+          }
+          if (recordUpdateResult.error) {
+            response.status = 500;
+            console.error('Error applying approved changes:', recordUpdateResult);
+            return { error: `Failed to apply approved changes: ${recordUpdateResult.error}` };
+          }
         }
+
+        const r = await this.adminforth.updateResourceRecord({
+          resource: this.diffResource, recordId: recordId,
+          adminUser: authRes, oldRecord: diffRecord,
+          updates: {
+            [this.options.resourceColumns.resourceStatusColumnName]: newDiffRecordStatus,
+            [this.options.resourceColumns.resourceResponserIdColumnName]: responserId,
+          }
+        });
+        if (r.error) {
+          response.status = 500;
+          return { error: `Failed to update diff record status: ${r.error}` };
+        }
+        return { ok: true };
       }
     })
   }

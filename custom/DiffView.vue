@@ -22,7 +22,9 @@ async function sendApproveRequest(approved) {
     path: `/plugin/crud-approve/update-status`,
     method: 'POST',
     body: {
+      connectorId: props.resource.connectorId,
       resourceId: props.resource.resourceId,
+      action: props.record[props.meta.resourceColumns.resourceActionColumnName],
       recordId: props.record[props.meta.resourceColumns.resourceIdColumnName],
       approved: approved
     }
