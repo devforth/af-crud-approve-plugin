@@ -16,6 +16,7 @@
     "typescript": "^5.7.3"
   },
   "dependencies": {
+    "@adminforth/two-factors-auth": "^2.9.16",
     "adminforth": "latest"
   }
 }

@@ -1,6 +1,8 @@
 import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IHttpServer } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { ApprovalStatusEnum, type PluginOptions } from './types.js';
+import TwoFactorsAuthPlugin from '@adminforth/two-factors-auth';
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
@@ -96,7 +98,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     });
   }
 
-  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra) => {
+  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra, calledFromInside?: boolean) => {
+    if (this.options.diffTableName === resource.resourceId || calledFromInside === true) {
+      return false;
+    }
+
     if (this.options.shouldReview !== false) {
       let shouldReviewFunc: (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>;
       if (typeof this.options.shouldReview === 'function') {
@@ -239,27 +245,178 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     return `single`;
   }
 
+  callBeforeSaveHooks = async (
+    // resource: AdminForthResource, action: AllowedActionsEnum, record: any, 
+    // adminUser: AdminUser, recordId?: any, extra?: HttpExtra
+    resource: AdminForthResource, action: AllowedActionsEnum, record: any,
+    adminUser: AdminUser, recordId: any, updates: any, oldRecord: any,
+    adminforth: IAdminForth, extra?: HttpExtra
+  ) => {
+    let hooks = [];
+    if (action === AllowedActionsEnum.create) {
+      hooks = resource.hooks.create.beforeSave;
+    } else if (action === AllowedActionsEnum.edit) {
+      hooks = resource.hooks.edit.beforeSave;
+    } else if (action === AllowedActionsEnum.delete) {
+      hooks = resource.hooks.delete.beforeSave;
+    }
+
+    if (!hooks[0].toString().includes('this.createApprovalRequest')) {
+      throw new Error(`CRUDApprovePlugin must be the first beforeSave hook on resource ${resource.label} for action ${action}`);
+    }
+    const remainingHooks = hooks.slice(1);
+    console.log('remainingHooks', remainingHooks);
+    for (const hook of remainingHooks) {
+      const resp = await hook({ 
+        resource, 
+        record, 
+        adminUser,
+        recordId,
+        adminforth: this.adminforth,
+        extra,
+        updates,
+        oldRecord,
+      });
+      if (!resp || (!resp.ok && !resp.error)) {
+        throw new Error(`Hook beforeSave must return object with {ok: true} or { error: 'Error' } `);
+      }
+
+      if (resp.error) {
+        return { error: resp.error };
+      }
+    }
+    return { ok: true, error: null };
+  }
+
+  callAfterSaveHooks = async (
+    // resource: AdminForthResource, action: AllowedActionsEnum, record: any, 
+    // adminUser: AdminUser, recordId: any, extra?: HttpExtra
+
+    resource: AdminForthResource,
+    action: AllowedActionsEnum,
+    record: any,
+    adminUser: AdminUser,
+    recordId: any,
+    updates: any,
+    oldRecord: any,
+    adminforth: IAdminForth,
+    extra?: HttpExtra
+  ) => {
+    let hooks = [];
+    if (action === AllowedActionsEnum.create) {
+      hooks = resource.hooks.create.afterSave;
+    } else if (action === AllowedActionsEnum.edit) {
+      hooks = resource.hooks.edit.afterSave;
+    } else if (action === AllowedActionsEnum.delete) {
+      hooks = resource.hooks.delete.afterSave;
+    }
+
+    for (const hook of hooks) {
+      const resp = await hook({
+        resource,
+        record,
+        adminUser,
+        recordId,
+        adminforth: this.adminforth,
+        extra,
+        updates,
+        oldRecord,
+      });
+      if (!resp || (!resp.ok && !resp.error)) {
+        throw new Error(`Hook afterSave must return object with {ok: true} or { error: 'Error' } `);
+      }
+
+      if (resp.error) {
+        return { error: resp.error };
+      }
+    }
+  }
+
+  verifyAuth = async (cookies: Array<{key: string, value: string}>) => {
+    let authCookie;
+    for (const i in cookies) {
+      if (cookies[i].key === `adminforth_${this.adminforth.config.customization.brandNameSlug}_jwt`) {
+        authCookie = cookies[i].value;
+      }
+    }
+    const authRes = await this.adminforth.auth.verify(authCookie, 'auth', true);
+    const username = authRes.username;
+    const userRole = authRes.dbUser.role;
+    if (!this.options.allowedUserNames?.includes(username) && !this.options.allowedUserRoles?.includes(userRole)) {
+      return { error: 'You are not allowed to perform this action', user: undefined };
+    }
+    return { error: null, authRes: authRes };
+  }
+
   setupEndpoints(server: IHttpServer): void {
+    server.endpoint({
+      method: 'POST',
+      path: `/plugin/crud-approve/is2fa-required`,
+      noAuth: true,
+      handler: async ({ body, adminUser, response, cookies }) => {
+        const authRes = this.verifyAuth(cookies);
+        if ('error' in authRes) {
+          response.status = 403;
+          return { error: authRes.error };
+        }
+        
+        const { resourceId } = body;
+        const resource = this.adminforth.config.resources.find((res) => res.resourceId == resourceId);
+        if (!resource) {
+          response.status = 404;
+          return { error: 'Resource not found' };
+        }
+
+        // find crud plugin on the resource
+        const crudApprovePluginInstance = resource.plugins.find((p) => p instanceof CRUDApprovePlugin) as { pluginInstance: CRUDApprovePlugin };
+        if (!crudApprovePluginInstance) {
+          response.status = 400;
+          return { error: 'CRUD Approve Plugin not found on the resource' };
+        }
+
+        if (crudApprovePluginInstance.options.call2faModal !== false) {
+          let call2faModalFunc: (resource: AdminForthResource, action: AllowedActionsEnum, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>;
+          if (typeof crudApprovePluginInstance.options.call2faModal === 'function') {
+            call2faModalFunc = crudApprovePluginInstance.options.call2faModal;
+          } else {
+            call2faModalFunc = async () => true;
+          }
+          const call2faModal = await call2faModalFunc(resource, 'any', {}, authRes);
+          return { require2fa: call2faModal };
+        }
+        return { require2fa: false };
+      }
+    })
     server.endpoint({
       method: 'POST',
       path: `/plugin/crud-approve/update-status`,
       noAuth: true,
-      handler: async ({ body, adminUser, response, cookies  }) => {
-        let authCookie;
-        for (const i in cookies) {
-          if (cookies[i].key === `adminforth_${this.adminforth.config.customization.brandNameSlug}_jwt`) {
-            authCookie = cookies[i].value;
+      handler: async ({ body, response, cookies }) => {
+        const authRes = await this.verifyAuth(cookies);
+        if (authRes.error) {
+          response.status = 403;
+          return { error: authRes.error };
+        }
+        const adminUser = authRes.authRes;
+
+        const { resourceId, recordId, action, approved, code } = body;
+        if (this.options.call2faModal === true) {
+          const verificationResult = code;
+          if (!verificationResult) {
+            return { ok: false, error: 'No verification result provided' };
+          }
+          const t2fa = this.adminforth.getPluginByClassName<TwoFactorsAuthPlugin>('TwoFactorsAuthPlugin');
+          const result = await t2fa.verify(verificationResult, {
+            adminUser: adminUser,
+            userPk: adminUser.pk,
+            cookies: cookies
+          });
+
+          if (!result?.ok) {
+            return { ok: false, error: result?.error ?? 'Provided 2fa verification data is invalid' };
           }
         }
-        const authRes = await this.adminforth.auth.verify(authCookie, 'auth', true);
-        const username = authRes.username;
-        const userRole = authRes.dbUser.role;
-        if (!this.options.allowedUserNames?.includes(username) && !this.options.allowedUserRoles?.includes(userRole)) {
-          response.status = 403;
-          return { error: 'You are not allowed to perform this action' };
-        }
         
-        const { resourceId, recordId, action, approved } = body;
         const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
           Filters.EQ(this.options.resourceColumns.resourceIdColumnName, recordId),
         )
@@ -272,37 +429,97 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         const newDiffRecordStatus = approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected;
         
         if (approved === true) {
-          const resource = this.adminforth.config.resources.find((res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]);
+          const resource = this.adminforth.config.resources.find(
+            (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
+          );
           const diffData = diffRecord[this.options.resourceColumns.resourceDataColumnName];
           let recordUpdateResult;
+          const beforeSaveResp = await this.callBeforeSaveHooks(
+            resource, action as AllowedActionsEnum, diffData['newRecord'], 
+            adminUser, diffRecord[this.options.resourceColumns.resourceRecordIdColumnName],
+            undefined, diffData['oldRecord'], this.adminforth, undefined
+          );
+          if (beforeSaveResp.error) {
+            response.status = 500;
+            return { error: `FailcallBeforeSaveHooksed to apply approved changes: ${beforeSaveResp.error}` };
+          }
+
+          const connector = this.adminforth.connectors[resource.dataSource];
+          let oldRecord;
           if (action === AllowedActionsEnum.create) {
-            recordUpdateResult = await this.adminforth.createResourceRecord({
-              resource: resource, record: diffData['newRecord'], adminUser: authRes
-            });
+            const err = this.adminforth.validateRecordValues(resource, diffData['newRecord'], 'create');
+            if (err) {
+              return { error: err };
+            }
+
+            // remove virtual columns from record
+            for (const column of resource.columns.filter((col) => col.virtual)) {
+              if (diffData['newRecord'][column.name]) {
+                delete diffData['newRecord'][column.name];
+              }
+            }
+            recordUpdateResult = await connector.createRecord({ resource, record: diffData['newRecord'], adminUser });
           } else {
             const targetRecordId = diffRecord[this.options.resourceColumns.resourceRecordIdColumnName];
+
             if (action === AllowedActionsEnum.edit) {
-              recordUpdateResult = await this.adminforth.updateResourceRecord({
-                resource: resource, recordId: targetRecordId, updates: diffData['newRecord'],
-                adminUser: authRes, oldRecord: diffData['oldRecord'],
-              });
+              const dataToUse = diffData['newRecord'];
+              const err = this.adminforth.validateRecordValues(resource, dataToUse, 'edit', targetRecordId);
+              if (err) {
+                return { error: err };
+              }
+              // remove editReadonly columns from record
+              oldRecord = await connector.getRecordByPrimaryKey(resource, targetRecordId);
+              console.log('1oldRecord:', oldRecord);
+              for (const column of resource.columns.filter((col) => col.editReadonly)) {
+                if (column.name in dataToUse)
+                  delete dataToUse[column.name];
+              }
+              const newValues = {};
+              for (const recordField in dataToUse) {
+                if (dataToUse[recordField] !== oldRecord[recordField]) {
+                  // leave only changed fields to reduce data transfer/modifications in db
+                  const column = resource.columns.find((col) => col.name === recordField);
+                  if (!column || !column.virtual) {
+                    // exclude virtual columns
+                    newValues[recordField] = dataToUse[recordField];
+                  }
+                }
+              } 
+
+              if (Object.keys(newValues).length > 0) {
+                const { error } = await connector.updateRecord({ resource, recordId: targetRecordId, newValues });
+                if ( error ) {
+                  return { error };
+                }
+              }
             } else if (action === AllowedActionsEnum.delete) {
-              recordUpdateResult = await this.adminforth.deleteResourceRecord({
-                resource: resource, recordId: targetRecordId, adminUser: authRes,
-                record: diffData['oldRecord']
-              });
+              // recordUpdateResult = await this.adminforth.deleteResourceRecord({
+              //   resource: resource, recordId: targetRecordId, adminUser: adminUser,
+              //   record: diffData['oldRecord']
+              // });
+              await connector.deleteRecord({ resource, recordId});
             }
           }
-          if (recordUpdateResult.error) {
+          if (recordUpdateResult?.error) {
             response.status = 500;
             console.error('Error applying approved changes:', recordUpdateResult);
             return { error: `Failed to apply approved changes: ${recordUpdateResult.error}` };
+          }
+          const afterSaveResp = await this.callAfterSaveHooks(
+            resource, action as AllowedActionsEnum, diffData['newRecord'], 
+            adminUser, diffRecord[this.options.resourceColumns.resourceRecordIdColumnName],
+            diffData['newRecord'], oldRecord, this.adminforth, undefined
+          );
+          if (afterSaveResp?.error) {
+            response.status = 500;
+            return { error: `Failed to apply approved changes: ${afterSaveResp.error}` };
           }
         }
 
         const r = await this.adminforth.updateResourceRecord({
           resource: this.diffResource, recordId: recordId,
-          adminUser: authRes, oldRecord: diffRecord,
+          adminUser: adminUser, oldRecord: diffRecord,
           updates: {
             [this.options.resourceColumns.resourceStatusColumnName]: newDiffRecordStatus,
             [this.options.resourceColumns.resourceResponserIdColumnName]: responserId,
