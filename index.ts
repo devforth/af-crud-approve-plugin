@@ -485,9 +485,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           response.status = 400;
           return { error: 'Diff record is not pending' };
         }
-
-        const responserId = authRes.authRes.pk;
-        const newDiffRecordStatus = approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected;
         
         if (approved === true) {
           const resource = this.adminforth.config.resources.find(
@@ -559,8 +556,8 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           resource: this.diffResource, recordId: diffId,
           adminUser: adminUser, oldRecord: diffRecord,
           updates: {
-            [this.options.resourceColumns.statusColumnName]: newDiffRecordStatus,
-            [this.options.resourceColumns.responserIdColumnName]: responserId,
+            [this.options.resourceColumns.statusColumnName]: approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected,
+            [this.options.resourceColumns.responserIdColumnName]: authRes.authRes.pk,
           }
         });
         if (r.error) {

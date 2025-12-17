@@ -10,7 +10,6 @@ import adminforth from '@/adminforth';
 import { Button } from '@/afcl'
 
 
-const route = useRoute();
 const props = defineProps(['column', 'record', 'meta', 'resource', 'adminUser']);
 const coreStore = useCoreStore();
 const theme = computed(() => coreStore.theme);
