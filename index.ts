@@ -70,9 +70,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
 
     resourceConfig.hooks.create.beforeSave.unshift(async ({ resource, record, adminUser, extra }) => {
       // intercept create action and create approval request instead
-      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.create, record, adminUser, null, extra);
-      if (!res) {
-        return {ok: true};
+      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.create, record, adminUser, undefined, record, extra);
+      if (!res.ok) {
+        if (res.error != 'Aborted by native resource' && res.error != 'Review disabled for this case') {
+          return res;
+        }
       }
       // prevent actual creation
       return {ok: false, error: 'Creation pending approval' };
@@ -80,9 +82,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
 
     resourceConfig.hooks.edit.beforeSave.unshift(async ({ resource, updates, adminUser, oldRecord, extra }) => {
       // intercept update action and create approval request instead
-      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.edit, updates, adminUser, oldRecord, extra);
-      if (!res) {
-        return {ok: true};
+      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.edit, updates, adminUser, oldRecord, undefined, extra);
+      if (!res.ok) {
+        if (res.error != 'Aborted by native resource' && res.error != 'Review disabled for this case') {
+          return res;
+        }
       }
       // prevent actual update
       return {ok: false, error: 'Update pending approval' };
@@ -90,18 +94,20 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
 
     resourceConfig.hooks.delete.beforeSave.unshift(async ({ resource, record, adminUser, extra }) => {
       // intercept delete action and create approval request instead
-      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.delete, record, adminUser, null, extra);
-      if (!res) {
-        return {ok: true};
+      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.delete, record, adminUser, undefined, undefined, extra);
+      if (!res.ok) {
+        if (res.error != 'Aborted by native resource' && res.error != 'Review disabled for this case') {
+          return res;
+        }
       }
       // prevent actual deletion
       return {ok: false, error: 'Deletion pending approval' };
     });
   }
 
-  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra, calledFromInside?: boolean) => {
-    if (this.options.diffTableName === resource.resourceId || calledFromInside === true) {
-      return false;
+  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra) => {
+    if (this.options.diffTableName === resource.resourceId) {
+      return { ok: true, error: 'Aborted by native resource' };
     }
 
     if (this.options.shouldReview !== false) {
@@ -113,7 +119,25 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       }
       const shouldReview = await shouldReviewFunc(resource, action, data, user, oldRecord, extra);
       if (!shouldReview) {
-        return false;
+        return { ok: true, error: 'Review disabled for this case' };
+      }
+    }
+
+    if (this.options.call2faModal === true) {
+      const verificationResult = extra?.body?.meta?.confirmationResult;
+      const cookies = extra?.cookies;
+      if (!verificationResult) {
+        return { ok: false, error: 'No verification result provided' };
+      }
+      const t2fa = this.adminforth.getPluginByClassName<TwoFactorsAuthPlugin>('TwoFactorsAuthPlugin');
+      const result = await t2fa.verify(verificationResult, {
+        adminUser: user,
+        userPk: user.pk,
+        cookies: cookies
+      });
+
+      if (!result?.ok) {
+        return { ok: false, error: result?.error ?? 'Provided 2fa verification data is invalid' };
       }
     }
   
@@ -122,14 +146,14 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
 
     let newRecord = {};
     const connector = this.adminforth.connectors[resource.dataSource];
-    if (action === AllowedActionsEnum.edit) {
-      newRecord = await connector.getRecordByPrimaryKey(resource, recordId);
-      for (const key in updates.body.record) {
-        newRecord[key] = updates.body.record[key];
-      }
-    } else if (action === AllowedActionsEnum.create) {
+    if (action === AllowedActionsEnum.create) {
       oldRecord = {};
-      newRecord = updates.body.record;
+      newRecord = updates;
+    } else if (action === AllowedActionsEnum.edit) {
+      newRecord = await connector.getRecordByPrimaryKey(resource, recordId);
+      for (const key in updates) { 
+        newRecord[key] = updates[key];
+      }
     } else if (action === AllowedActionsEnum.delete) {
       oldRecord = await connector.getRecordByPrimaryKey(resource, recordId);
     }
@@ -190,7 +214,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     }
     const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
     await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
-    return true
+    return { ok: true, error: null };
   }
 
   /**
