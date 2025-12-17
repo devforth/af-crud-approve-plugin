@@ -44,7 +44,7 @@ export enum AllowedForReviewActionsEnum {
 }
 
 export enum ApprovalStatusEnum {
-    pending = 'pending',
-    approved = 'approved',
-    rejected = 'rejected'
+    pending = 1,
+    approved = 2,
+    rejected = 3
 }

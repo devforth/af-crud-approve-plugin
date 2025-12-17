@@ -5,7 +5,6 @@ import "@git-diff-view/vue/styles/diff-view.css";
 import { DiffView, DiffModeEnum } from "@git-diff-view/vue";
 import { generateDiffFile } from "@git-diff-view/file";
 import { callAdminForthApi } from '@/utils';
-import { useRoute } from 'vue-router';
 import adminforth from '@/adminforth';
 import { Button } from '@/afcl'
 
@@ -111,7 +110,7 @@ watch([mode, theme], ([m, t]) => {
     :diff-view-wrap="true"
     :diff-view-font-size="14"
   />
-  <div v-if="record[meta.resourceColumns.statusColumnName] !== 'approved'" style="margin-top: 16px; display: flex; gap: 8px;">
+  <div v-if="record[meta.resourceColumns.statusColumnName] === 1" style="margin-top: 16px; display: flex; gap: 8px;">
     <Button style="background-color: green; color: white;" @click="sendApproveRequest(true)" :loader="false" class="w-full">Approve</Button>
     <Button style="background-color: red; color: white;" @click="sendApproveRequest(false)" :loader="false" class="w-full">Reject</Button>
   </div>
