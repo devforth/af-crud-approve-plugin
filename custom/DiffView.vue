@@ -17,8 +17,8 @@ const theme = computed(() => coreStore.theme);
 const isMobile = computed(() => /(Android|iPhone|iPad|iPod)/i.test(navigator.userAgent));
 const mode = computed(() => isMobile.value ? DiffModeEnum.Unified : DiffModeEnum.Split);
 
-const oldContent = JSON.stringify(props.record[props.meta.resourceColumns.resourceDataColumnName].oldRecord, null, 2)
-const newContent = JSON.stringify(props.record[props.meta.resourceColumns.resourceDataColumnName].newRecord, null, 2)
+const oldContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].oldRecord, null, 2)
+const newContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].newRecord, null, 2)
 
 const diffFile = ref();
 
@@ -33,13 +33,10 @@ async function call2faModal() {
 
 async function sendApproveRequest(approved) {
   // get resource name from path
-  const resourceName = route.params.primaryKey;
   const is2faRequired = await callAdminForthApi({
     path: `/plugin/crud-approve/is2fa-required`,
     method: 'POST',
-    body: {
-      resourceId: resourceName
-    }
+    body: {resourceId: props.resource.resourceId}
   });
 
   let code = null;
@@ -58,8 +55,9 @@ async function sendApproveRequest(approved) {
       code: code,
       connectorId: props.resource.connectorId,
       resourceId: props.resource.resourceId,
-      action: props.record[props.meta.resourceColumns.resourceActionColumnName],
-      recordId: props.record[props.meta.resourceColumns.resourceIdColumnName],
+      action: props.record[props.meta.resourceColumns.actionColumnName],
+      recordId: props.record[props.meta.resourceColumns.recordIdColumnName],
+      diffId: props.record[props.meta.resourceColumns.idColumnName],
       approved: approved
     }
   });
@@ -114,7 +112,7 @@ watch([mode, theme], ([m, t]) => {
     :diff-view-wrap="true"
     :diff-view-font-size="14"
   />
-  <div v-if="record[meta.resourceColumns.resourceStatusColumnName] !== 'approved'" style="margin-top: 16px; display: flex; gap: 8px;">
+  <div v-if="record[meta.resourceColumns.statusColumnName] !== 'approved'" style="margin-top: 16px; display: flex; gap: 8px;">
     <Button style="background-color: green; color: white;" @click="sendApproveRequest(true)" :loader="false" class="w-full">Approve</Button>
     <Button style="background-color: red; color: white;" @click="sendApproveRequest(false)" :loader="false" class="w-full">Reject</Button>
   </div>

@@ -18,21 +18,22 @@ export interface PluginOptions {
      */
     shouldReview: boolean | ((resource: AdminForthResource, action: AllowedForReviewActionsEnum, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>);
     /**
-     * Whether to call 2fa modal before creating approval request. If used on diffTable resource, 2fa will be called on approve/reject actions. You can pass functions here as well for more complex logic.
+     * Whether to call 2fa modal before creating approval request. If used on diffTable resource, 2fa will be called on approve/reject actions.
      */
     call2faModal: boolean;
     /**
      * Column names mapping in the diff table.
      */
     resourceColumns: {
+        idColumnName: string;
+        recordIdColumnName: string;
         resourceIdColumnName: string;
-        resourceRecordIdColumnName: string;
-        resourceActionColumnName: string;
-        resourceDataColumnName: string;
-        resourceUserIdColumnName: string;
-        resourceResponserIdColumnName: string;
-        resourceStatusColumnName: string;
-        resourceCreatedAtColumnName: string;
+        actionColumnName: string;
+        dataColumnName: string;
+        userIdColumnName: string;
+        responserIdColumnName: string;
+        statusColumnName: string;
+        createdAtColumnName: string;
     }
 }
 

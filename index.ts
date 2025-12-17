@@ -1,10 +1,11 @@
-import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IHttpServer } from "adminforth";
+import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { ApprovalStatusEnum, type PluginOptions } from './types.js';
 import TwoFactorsAuthPlugin from '@adminforth/two-factors-auth';
 
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+import { randomUUID } from "crypto";
 dayjs.extend(utc);
 
 
@@ -33,12 +34,12 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
 
 
     if (this.options.diffTableName === resourceConfig.resourceId) {
-      let diffColumn = resourceConfig.columns.find((c) => c.name === this.options.resourceColumns.resourceDataColumnName); 
+      let diffColumn = resourceConfig.columns.find((c) => c.name === this.options.resourceColumns.dataColumnName); 
       if (!diffColumn) {
-        throw new Error(`Column ${this.options.resourceColumns.resourceDataColumnName} not found in ${resourceConfig.label}`)
+        throw new Error(`Column ${this.options.resourceColumns.dataColumnName} not found in ${resourceConfig.label}`)
       }
       if (diffColumn.type !== AdminForthDataTypes.JSON) {
-        throw new Error(`Column ${this.options.resourceColumns.resourceDataColumnName} must be of type 'json'`)
+        throw new Error(`Column ${this.options.resourceColumns.dataColumnName} must be of type 'json'`)
       }
     
       diffColumn.showIn = {
@@ -58,7 +59,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         }
       }
       resourceConfig.options.defaultSort = {
-        columnName: this.options.resourceColumns.resourceCreatedAtColumnName,
+        columnName: this.options.resourceColumns.createdAtColumnName,
         direction: AdminForthSortDirections.desc
       }
     }    
@@ -176,15 +177,16 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       }
     }
 
+    const createdAt = dayjs.utc().format();
     const record = {
+      [this.options.resourceColumns.idColumnName]: randomUUID(),
       [this.options.resourceColumns.resourceIdColumnName]: resource.resourceId,
-      [this.options.resourceColumns.resourceActionColumnName]: action,
-      [this.options.resourceColumns.resourceStatusColumnName]: ApprovalStatusEnum.pending,
-      [this.options.resourceColumns.resourceDataColumnName]: { 'oldRecord': oldRecord, 'newRecord': newRecord },
-      [this.options.resourceColumns.resourceUserIdColumnName]: user.pk,
-      [this.options.resourceColumns.resourceRecordIdColumnName]: recordId,
-      // utc iso string
-      [this.options.resourceColumns.resourceCreatedAtColumnName]: dayjs.utc().format(),
+      [this.options.resourceColumns.actionColumnName]: action,
+      [this.options.resourceColumns.statusColumnName]: ApprovalStatusEnum.pending,
+      [this.options.resourceColumns.dataColumnName]: { 'oldRecord': oldRecord, 'newRecord': newRecord },
+      [this.options.resourceColumns.userIdColumnName]: user.pk,
+      [this.options.resourceColumns.recordIdColumnName]: recordId,
+      [this.options.resourceColumns.createdAtColumnName]: createdAt,
     }
     const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
     await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
@@ -225,11 +227,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
 
     const record = {
       [this.options.resourceColumns.resourceIdColumnName]: resourceId,
-      [this.options.resourceColumns.resourceActionColumnName]: actionId,
-      [this.options.resourceColumns.resourceDataColumnName]: { 'oldRecord': oldData || {}, 'newRecord': data },
-      [this.options.resourceColumns.resourceUserIdColumnName]: user.pk,
-      [this.options.resourceColumns.resourceIdColumnName]: recordId,
-      [this.options.resourceColumns.resourceCreatedAtColumnName]: dayjs.utc().format(),
+      [this.options.resourceColumns.actionColumnName]: actionId,
+      [this.options.resourceColumns.dataColumnName]: { 'oldRecord': oldData || {}, 'newRecord': data },
+      [this.options.resourceColumns.userIdColumnName]: user.pk,
+      [this.options.resourceColumns.recordIdColumnName]: recordId,
+      [this.options.resourceColumns.createdAtColumnName]: dayjs.utc().format(),
     }
     const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
     await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
@@ -348,6 +350,60 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     return { error: null, authRes: authRes };
   }
 
+  createRecord = async (resource: AdminForthResource, diffData: any, adminUser: AdminUser) => {
+    const connector = this.adminforth.connectors[resource.dataSource];
+    const err = this.adminforth.validateRecordValues(resource, diffData['newRecord'], 'create');
+    if (err) {
+      return { ok: false, error: err, createdRecord: null };
+    }
+
+    // remove virtual columns from record
+    for (const column of resource.columns.filter((col) => col.virtual)) {
+      if (diffData['newRecord'][column.name]) {
+        delete diffData['newRecord'][column.name];
+      }
+    }
+    return await connector.createRecord({ resource, record: diffData['newRecord'], adminUser });
+  }
+
+  editRecord = async (resource: AdminForthResource, diffData: any, targetRecordId: any, connector: IAdminForthDataSourceConnectorBase) => {
+    let oldRecord;
+    const dataToUse = diffData['newRecord'];
+    const err = this.adminforth.validateRecordValues(resource, dataToUse, 'edit', targetRecordId);
+    if (err) {
+      return { error: err };
+    }
+    // remove editReadonly columns from record
+    oldRecord = await connector.getRecordByPrimaryKey(resource, targetRecordId);
+    for (const column of resource.columns.filter((col) => col.editReadonly)) {
+      if (column.name in dataToUse)
+        delete dataToUse[column.name];
+    }
+    const newValues = {};
+    for (const recordField in dataToUse) {
+      if (dataToUse[recordField] !== oldRecord[recordField]) {
+        // leave only changed fields to reduce data transfer/modifications in db
+        const column = resource.columns.find((col) => col.name === recordField);
+        if (!column || !column.virtual) {
+          // exclude virtual columns
+          newValues[recordField] = dataToUse[recordField];
+        }
+      }
+    } 
+
+    if (Object.keys(newValues).length > 0) {
+      const { error } = await connector.updateRecord({ resource, recordId: targetRecordId, newValues });
+      if ( error ) {
+        return { ok: false, error };
+      }
+    }
+    return { ok: true, error: null };
+  }
+
+  deleteRecord = async (resource: AdminForthResource, targetRecordId: any, connector: IAdminForthDataSourceConnectorBase) => {
+    return await connector.deleteRecord({ resource, recordId: targetRecordId });
+  }
+
   setupEndpoints(server: IHttpServer): void {
     server.endpoint({
       method: 'POST',
@@ -399,7 +455,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         }
         const adminUser = authRes.authRes;
 
-        const { resourceId, recordId, action, approved, code } = body;
+        const { resourceId, diffId, recordId, action, approved, code } = body;
         if (this.options.call2faModal === true) {
           const verificationResult = code;
           if (!verificationResult) {
@@ -418,99 +474,81 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         }
         
         const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
-          Filters.EQ(this.options.resourceColumns.resourceIdColumnName, recordId),
+          Filters.EQ(this.options.resourceColumns.idColumnName, diffId),
         )
         if (!diffRecord) {
           response.status = 404;
           return { error: 'Diff record not found' };
         }
 
-        const responserId = authRes.pk;
+        if (diffRecord[this.options.resourceColumns.statusColumnName] !== ApprovalStatusEnum.pending) {
+          response.status = 400;
+          return { error: 'Diff record is not pending' };
+        }
+
+        const responserId = authRes.authRes.pk;
         const newDiffRecordStatus = approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected;
         
         if (approved === true) {
           const resource = this.adminforth.config.resources.find(
             (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
           );
-          const diffData = diffRecord[this.options.resourceColumns.resourceDataColumnName];
-          let recordUpdateResult;
+          const diffData = diffRecord[this.options.resourceColumns.dataColumnName];
           const beforeSaveResp = await this.callBeforeSaveHooks(
             resource, action as AllowedActionsEnum, diffData['newRecord'], 
-            adminUser, diffRecord[this.options.resourceColumns.resourceRecordIdColumnName],
+            adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
             undefined, diffData['oldRecord'], this.adminforth, undefined
           );
           if (beforeSaveResp.error) {
             response.status = 500;
             return { error: `FailcallBeforeSaveHooksed to apply approved changes: ${beforeSaveResp.error}` };
           }
-
+          
+          let recordUpdateResult;
           const connector = this.adminforth.connectors[resource.dataSource];
-          let oldRecord;
           if (action === AllowedActionsEnum.create) {
-            const err = this.adminforth.validateRecordValues(resource, diffData['newRecord'], 'create');
-            if (err) {
-              return { error: err };
-            }
-
-            // remove virtual columns from record
-            for (const column of resource.columns.filter((col) => col.virtual)) {
-              if (diffData['newRecord'][column.name]) {
-                delete diffData['newRecord'][column.name];
-              }
-            }
-            recordUpdateResult = await connector.createRecord({ resource, record: diffData['newRecord'], adminUser });
-          } else {
-            const targetRecordId = diffRecord[this.options.resourceColumns.resourceRecordIdColumnName];
-
-            if (action === AllowedActionsEnum.edit) {
-              const dataToUse = diffData['newRecord'];
-              const err = this.adminforth.validateRecordValues(resource, dataToUse, 'edit', targetRecordId);
-              if (err) {
-                return { error: err };
-              }
-              // remove editReadonly columns from record
-              oldRecord = await connector.getRecordByPrimaryKey(resource, targetRecordId);
-              console.log('1oldRecord:', oldRecord);
-              for (const column of resource.columns.filter((col) => col.editReadonly)) {
-                if (column.name in dataToUse)
-                  delete dataToUse[column.name];
-              }
-              const newValues = {};
-              for (const recordField in dataToUse) {
-                if (dataToUse[recordField] !== oldRecord[recordField]) {
-                  // leave only changed fields to reduce data transfer/modifications in db
-                  const column = resource.columns.find((col) => col.name === recordField);
-                  if (!column || !column.virtual) {
-                    // exclude virtual columns
-                    newValues[recordField] = dataToUse[recordField];
-                  }
-                }
-              } 
-
-              if (Object.keys(newValues).length > 0) {
-                const { error } = await connector.updateRecord({ resource, recordId: targetRecordId, newValues });
-                if ( error ) {
-                  return { error };
-                }
-              }
-            } else if (action === AllowedActionsEnum.delete) {
-              // recordUpdateResult = await this.adminforth.deleteResourceRecord({
-              //   resource: resource, recordId: targetRecordId, adminUser: adminUser,
-              //   record: diffData['oldRecord']
-              // });
-              await connector.deleteRecord({ resource, recordId});
-            }
+            recordUpdateResult = await this.createRecord(resource, diffData, adminUser);
+          } else if (action === AllowedActionsEnum.edit) {
+            recordUpdateResult = await this.editRecord(
+              resource, diffData, diffRecord[this.options.resourceColumns.recordIdColumnName], connector
+            );
+          } else if (action === AllowedActionsEnum.delete) {
+            recordUpdateResult = await this.deleteRecord(
+              resource, diffRecord[this.options.resourceColumns.recordIdColumnName], connector
+            );
           }
           if (recordUpdateResult?.error) {
             response.status = 500;
             console.error('Error applying approved changes:', recordUpdateResult);
             return { error: `Failed to apply approved changes: ${recordUpdateResult.error}` };
           }
-          const afterSaveResp = await this.callAfterSaveHooks(
-            resource, action as AllowedActionsEnum, diffData['newRecord'], 
-            adminUser, diffRecord[this.options.resourceColumns.resourceRecordIdColumnName],
-            diffData['newRecord'], oldRecord, this.adminforth, undefined
-          );
+
+          let afterSaveResp;
+          if (action === AllowedActionsEnum.create) {
+            const newRecord = recordUpdateResult.createdRecord;
+            afterSaveResp = await this.callAfterSaveHooks(
+              resource, action as AllowedActionsEnum, newRecord, adminUser, 
+              diffRecord[this.options.resourceColumns.recordIdColumnName],
+              newRecord, {}, this.adminforth, undefined
+            );
+          } else if (action === AllowedActionsEnum.edit) {
+            const newRecord = diffData['newRecord'];
+            const oldRecord = await this.adminforth.connectors[resource.dataSource].getRecordByPrimaryKey(
+              resource, diffRecord[this.options.resourceColumns.recordIdColumnName]
+            );
+            afterSaveResp = await this.callAfterSaveHooks(
+              resource, action as AllowedActionsEnum, newRecord, adminUser, 
+              recordId, newRecord, oldRecord, this.adminforth, undefined
+            );
+          } else if (action === AllowedActionsEnum.delete) {
+            const newRecord = diffData['newRecord'];
+            afterSaveResp = await this.callAfterSaveHooks(
+              resource, action as AllowedActionsEnum, newRecord, adminUser, 
+              diffRecord[this.options.resourceColumns.recordIdColumnName],
+              {}, diffData['oldRecord'], this.adminforth, undefined
+            );
+          }
+
           if (afterSaveResp?.error) {
             response.status = 500;
             return { error: `Failed to apply approved changes: ${afterSaveResp.error}` };
@@ -518,11 +556,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         }
 
         const r = await this.adminforth.updateResourceRecord({
-          resource: this.diffResource, recordId: recordId,
+          resource: this.diffResource, recordId: diffId,
           adminUser: adminUser, oldRecord: diffRecord,
           updates: {
-            [this.options.resourceColumns.resourceStatusColumnName]: newDiffRecordStatus,
-            [this.options.resourceColumns.resourceResponserIdColumnName]: responserId,
+            [this.options.resourceColumns.statusColumnName]: newDiffRecordStatus,
+            [this.options.resourceColumns.responserIdColumnName]: responserId,
           }
         });
         if (r.error) {
