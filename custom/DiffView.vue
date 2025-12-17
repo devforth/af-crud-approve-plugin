@@ -7,6 +7,8 @@ import { generateDiffFile } from "@git-diff-view/file";
 import { callAdminForthApi } from '@/utils';
 import { useRoute } from 'vue-router';
 import adminforth from '@/adminforth';
+import { Button } from '@/afcl'
+
 
 const route = useRoute();
 const props = defineProps(['column', 'record', 'meta', 'resource', 'adminUser']);
@@ -61,6 +63,13 @@ async function sendApproveRequest(approved) {
       approved: approved
     }
   });
+  if (data.error) {
+    adminforth.alert({ message: `Error: ${data.error}`, variant: 'danger' });
+  } else {
+    adminforth.alert({ message: `Successfully ${approved ? 'approved' : 'rejected'} the change.`, variant: 'success' });
+    // reload page
+    window.location.reload();
+  }
 }
 
 function initDiffFile() {
@@ -105,8 +114,9 @@ watch([mode, theme], ([m, t]) => {
     :diff-view-wrap="true"
     :diff-view-font-size="14"
   />
-  <!-- approve button -->
-   <button @click="sendApproveRequest(true)" class="btn btn-success me-2 mt-3">Approve</button>
-   <button @click="sendApproveRequest(false)" class="btn btn-danger mt-3">Reject</button>
+  <div v-if="record[meta.resourceColumns.resourceStatusColumnName] !== 'approved'" style="margin-top: 16px; display: flex; gap: 8px;">
+    <Button style="background-color: green; color: white;" @click="sendApproveRequest(true)" :loader="false" class="w-full">Approve</Button>
+    <Button style="background-color: red; color: white;" @click="sendApproveRequest(false)" :loader="false" class="w-full">Reject</Button>
+  </div>
 </template>
   
