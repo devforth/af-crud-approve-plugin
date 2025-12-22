@@ -12,39 +12,27 @@ import { Button } from '@/afcl'
 const props = defineProps(['column', 'record', 'meta', 'resource', 'adminUser']);
 const coreStore = useCoreStore();
 const theme = computed(() => coreStore.theme);
-const isMobile = computed(() => /(Android|iPhone|iPad|iPod)/i.test(navigator.userAgent));
-const mode = computed(() => isMobile.value ? DiffModeEnum.Unified : DiffModeEnum.Split);
 
 const oldContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].oldRecord, null, 2)
 const newContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].newRecord, null, 2)
 
 const diffFile = ref();
 
-async function call2faModal() {
-  const code = await (window).adminforthTwoFaModal.get2FaConfirmationResult?.(undefined, "Approve/Reject Action Confirmation");
-  if (!code) {
-    adminforth.alert({ message: '2FA cancelled', variant: 'warning' });
-    return;
-  }
-  return code;
-}
+// async function call2faModal() {
+//   const code = await (window).adminforthTwoFaModal.get2FaConfirmationResult?.(undefined, "Approve/Reject Action Confirmation");
+//   if (!code) {
+//     adminforth.alert({ message: '2FA cancelled', variant: 'warning' });
+//     return;
+//   }
+//   return code;
+// }
 
 async function sendApproveRequest(approved) {
-  // get resource name from path
-  const is2faRequired = await callAdminForthApi({
-    path: `/plugin/crud-approve/is2fa-required`,
-    method: 'POST',
-    body: {resourceId: props.resource.resourceId}
-  });
-
-  let code = null;
-  if (is2faRequired && is2faRequired.require2fa === true) {
-    code = await call2faModal();
-    if (!code) {
-      console.log('2FA code not provided, aborting');
-      return;
-    }
-  }
+  // const code = await call2faModal();
+  // if (!code) {
+  //   console.log('2FA code not provided, aborting');
+  //   return;
+  // }
 
   const data = await callAdminForthApi({
     path: `/plugin/crud-approve/update-status`,
@@ -60,7 +48,7 @@ async function sendApproveRequest(approved) {
     }
   });
   if (data.error) {
-    adminforth.alert({ message: `Error: ${data.error}`, variant: 'danger' });
+    adminforth.alert({ message: `Error: ${data.error}`, variant: 'warning' });
   } else {
     adminforth.alert({ message: `Successfully ${approved ? 'approved' : 'rejected'} the change.`, variant: 'success' });
     // reload page
@@ -71,32 +59,25 @@ async function sendApproveRequest(approved) {
 function initDiffFile() {
   const file = generateDiffFile(
     'diff.json',
-    oldContent,
+    oldContent.slice(2, -1),
     'diff.json',
-    newContent,
+    newContent.slice(2, -1),
     'json',
     'json'
   );
   file.initTheme(theme.value === 'dark' ? 'dark' : 'light');
   file.init();
-  if (mode.value === DiffModeEnum.Split) {
-    file.buildSplitDiffLines();
-  } else {
-    file.buildUnifiedDiffLines();
-  }
+  file.buildUnifiedDiffLines();
+  console.log('diff file', file);
   diffFile.value = file;
 }
 
 initDiffFile();
 
-watch([mode, theme], ([m, t]) => {
+watch([theme], ([t]) => {
   if (!diffFile.value) return;
   diffFile.value.initTheme(t === 'dark' ? 'dark' : 'light');
-  if (m === DiffModeEnum.Split) {
-    diffFile.value.buildSplitDiffLines();
-  } else {
-    diffFile.value.buildUnifiedDiffLines();
-  }
+  diffFile.value.buildUnifiedDiffLines();
 });
 
 </script>
@@ -104,7 +85,7 @@ watch([mode, theme], ([m, t]) => {
 <template>
   <DiffView
     :diff-file="diffFile"
-    :diff-view-mode="mode"
+    :diff-view-mode="DiffModeEnum.Unified"
     :diff-view-theme="theme === 'dark' ? 'dark' : 'light'"
     :diff-view-highlight="true"
     :diff-view-wrap="true"

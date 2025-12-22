@@ -1,7 +1,6 @@
 import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
-import { ApprovalStatusEnum, type PluginOptions } from './types.js';
-import TwoFactorsAuthPlugin from '@adminforth/two-factors-auth';
+import { AllowedForReviewActionsEnum, ApprovalStatusEnum, type PluginOptions } from './types.js';
 
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
@@ -11,8 +10,6 @@ dayjs.extend(utc);
 
 export default class CRUDApprovePlugin extends AdminForthPlugin {
   options: PluginOptions;
-  // make sure plugin is activated later than other plugins
-  activationOrder: number = 9999999;
   adminforth: IAdminForth;
   diffResource: AdminForthResource;
 
@@ -26,135 +23,52 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     super.modifyResourceConfig(adminforth, resourceConfig);
     this.adminforth = adminforth;
 
-    const diffResourceData = adminforth.config.resources.find(r => r.resourceId === this.options.diffTableName);
-    if (!diffResourceData) {
-      throw new Error(`Diff table ${this.options.diffTableName} not found in resources`);
+    this.diffResource = this.resourceConfig;
+    let diffColumn = resourceConfig.columns.find((c) => c.name === this.options.resourceColumns.dataColumnName); 
+    if (!diffColumn) {
+      throw new Error(`Column ${this.options.resourceColumns.dataColumnName} not found in ${resourceConfig.label}`)
     }
-    this.diffResource = diffResourceData;
-
-
-    if (this.options.diffTableName === resourceConfig.resourceId) {
-      let diffColumn = resourceConfig.columns.find((c) => c.name === this.options.resourceColumns.dataColumnName); 
-      if (!diffColumn) {
-        throw new Error(`Column ${this.options.resourceColumns.dataColumnName} not found in ${resourceConfig.label}`)
-      }
-      if (diffColumn.type !== AdminForthDataTypes.JSON) {
-        throw new Error(`Column ${this.options.resourceColumns.dataColumnName} must be of type 'json'`)
-      }
-    
-      diffColumn.showIn = {
-        show: true,
-        list: false,
-        edit: false,
-        create: false,
-        filter: false,
-      };
-      diffColumn.components = {
-        show: { 
-          file: this.componentPath('DiffView.vue'),
-          meta: {
-            ...this.options, 
-            pluginInstanceId: this.pluginInstanceId
-          }
-        }
-      }
-      resourceConfig.options.defaultSort = {
-        columnName: this.options.resourceColumns.createdAtColumnName,
-        direction: AdminForthSortDirections.desc
-      }
-    }    
-    
-    if (this.options.diffTableName === resourceConfig.resourceId) {
-      return {ok: true};
+    if (diffColumn.type !== AdminForthDataTypes.JSON) {
+      // throw new Error(`Column ${this.options.resourceColumns.dataColumnName} must be of type 'json'`)
     }
 
-    resourceConfig.hooks.create.beforeSave.unshift(async ({ resource, record, adminUser, extra }) => {
-      // intercept create action and create approval request instead
-      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.create, record, adminUser, undefined, record, extra);
-      if (!res.ok) {
-        if (res.error != 'Aborted by native resource' && res.error != 'Review disabled for this case') {
-          return res;
+    diffColumn.components = {
+      show: { 
+        file: this.componentPath('ShowPageDiffView.vue'),
+        meta: {
+          ...this.options, 
+          pluginInstanceId: this.pluginInstanceId
+        }
+      },
+      list: {
+        file: this.componentPath('ListPageDiffView.vue'),
+        meta: {
+          ...this.options, 
+          pluginInstanceId: this.pluginInstanceId
         }
       }
-      // prevent actual creation
-      return {ok: false, error: 'Creation pending approval' };
-    });
-
-    resourceConfig.hooks.edit.beforeSave.unshift(async ({ resource, updates, adminUser, oldRecord, extra }) => {
-      // intercept update action and create approval request instead
-      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.edit, updates, adminUser, oldRecord, undefined, extra);
-      if (!res.ok) {
-        if (res.error != 'Aborted by native resource' && res.error != 'Review disabled for this case') {
-          return res;
-        }
-      }
-      // prevent actual update
-      return {ok: false, error: 'Update pending approval' };
-    });
-
-    resourceConfig.hooks.delete.beforeSave.unshift(async ({ resource, record, adminUser, extra }) => {
-      // intercept delete action and create approval request instead
-      const res = await this.createApprovalRequest(resource, AllowedActionsEnum.delete, record, adminUser, undefined, undefined, extra);
-      if (!res.ok) {
-        if (res.error != 'Aborted by native resource' && res.error != 'Review disabled for this case') {
-          return res;
-        }
-      }
-      // prevent actual deletion
-      return {ok: false, error: 'Deletion pending approval' };
-    });
+    }
+    resourceConfig.options.defaultSort = {
+      columnName: this.options.resourceColumns.createdAtColumnName,
+      direction: AdminForthSortDirections.desc
+    }
   }
-
-  createApprovalRequest = async (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra) => {
-    if (this.options.diffTableName === resource.resourceId) {
-      return { ok: true, error: 'Aborted by native resource' };
-    }
-
-    if (this.options.shouldReview !== false) {
-      let shouldReviewFunc: (resource: AdminForthResource, action: AllowedActionsEnum | string, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>;
-      if (typeof this.options.shouldReview === 'function') {
-        shouldReviewFunc = this.options.shouldReview;
-      } else {
-        shouldReviewFunc = async () => true;
-      }
-      const shouldReview = await shouldReviewFunc(resource, action, data, user, oldRecord, extra);
-      if (!shouldReview) {
-        return { ok: true, error: 'Review disabled for this case' };
-      }
-    }
-
-    if (this.options.call2faModal === true) {
-      const verificationResult = extra?.body?.meta?.confirmationResult;
-      const cookies = extra?.cookies;
-      if (!verificationResult) {
-        return { ok: false, error: 'No verification result provided' };
-      }
-      const t2fa = this.adminforth.getPluginByClassName<TwoFactorsAuthPlugin>('TwoFactorsAuthPlugin');
-      const result = await t2fa.verify(verificationResult, {
-        adminUser: user,
-        userPk: user.pk,
-        cookies: cookies
-      });
-
-      if (!result?.ok) {
-        return { ok: false, error: result?.error ?? 'Provided 2fa verification data is invalid' };
-      }
-    }
-  
+    
+  createApprovalRequest = async (resource: AdminForthResource, action: AllowedForReviewActionsEnum, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra) => {
     const recordIdFieldName = resource.columns.find((c) => c.primaryKey === true)?.name;
     const recordId = data?.[recordIdFieldName] || oldRecord?.[recordIdFieldName];
 
     let newRecord = {};
     const connector = this.adminforth.connectors[resource.dataSource];
-    if (action === AllowedActionsEnum.create) {
+    if (action === AllowedForReviewActionsEnum.create) {
       oldRecord = {};
       newRecord = updates;
-    } else if (action === AllowedActionsEnum.edit) {
+    } else if (action === AllowedForReviewActionsEnum.edit) {
       newRecord = await connector.getRecordByPrimaryKey(resource, recordId);
       for (const key in updates) { 
         newRecord[key] = updates[key];
       }
-    } else if (action === AllowedActionsEnum.delete) {
+    } else if (action === AllowedForReviewActionsEnum.delete) {
       oldRecord = await connector.getRecordByPrimaryKey(resource, recordId);
     }
 
@@ -180,10 +94,10 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     
     backendOnlyColumns.forEach((c) => {
       if (JSON.stringify(oldRecord[c.name]) != JSON.stringify(newRecord[c.name])) {
-        if (action !== AllowedActionsEnum.delete) {
+        if (action !== AllowedForReviewActionsEnum.delete) {
           newRecord[c.name] = '<hidden value after>'
         }
-        if (action !== AllowedActionsEnum.create) {
+        if (action !== AllowedForReviewActionsEnum.create) {
           oldRecord[c.name] = '<hidden value before>'
         }
       } else {
@@ -192,7 +106,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       }
     });
 
-    if (action === AllowedActionsEnum.edit) {
+    if (action === AllowedForReviewActionsEnum.edit) {
       for (const key in oldRecord) {
         if (JSON.stringify(oldRecord[key]) === JSON.stringify(newRecord[key])) {
           delete oldRecord[key];
@@ -217,50 +131,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     return { ok: true, error: null };
   }
 
-  /**
-   * Create a custom action in the audit log resource
-   * @param resourceId - The resourceId of the resource that the action is being performed on. Can be null if the action is not related to a specific resource.
-   * @param recordId - The recordId of the record that the action is being performed on. Can be null if the action is not related to a specific record.
-   * @param actionId - The id of the action being performed, can be random string
-   * @param data - The data to be stored in the audit log
-   * @param user - The adminUser user performing the action
-   */
-  logCustomAction = async (params: {
-      resourceId: string | null, 
-      recordId: string | null,
-      actionId: string,
-      oldData: Object | null,
-      data: Object,
-      user: AdminUser,
-      headers?: Record<string, string>
-  }) => {
-      const { resourceId, recordId, actionId, oldData, data, user, headers } = params;
-
-      // if type of params is not object, throw error
-      if (typeof params !== 'object') {
-        throw new Error('params must be an object, please check AdminFoirth AuditLog custom action documentation')
-      }
-    
-    if (resourceId) {
-      const resource = this.adminforth.config.resources.find((r) => r.resourceId === resourceId);
-      if (!resource) {
-        const similarResource = this.adminforth.config.resources.find((r) => r.resourceId.includes(resourceId));
-        throw new Error(`Resource ${resourceId} not found. Did you mean ${similarResource.resourceId}?`)
-      }
-    }
-
-    const record = {
-      [this.options.resourceColumns.resourceIdColumnName]: resourceId,
-      [this.options.resourceColumns.actionColumnName]: actionId,
-      [this.options.resourceColumns.dataColumnName]: { 'oldRecord': oldData || {}, 'newRecord': data },
-      [this.options.resourceColumns.userIdColumnName]: user.pk,
-      [this.options.resourceColumns.recordIdColumnName]: recordId,
-      [this.options.resourceColumns.createdAtColumnName]: dayjs.utc().format(),
-    }
-    const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
-    await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
-  }
-  
   validateConfigAfterDiscover(adminforth: IAdminForth, resourceConfig: AdminForthResource) {
     // optional method where you can safely check field types after database discovery was performed
   }
@@ -431,44 +301,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
   setupEndpoints(server: IHttpServer): void {
     server.endpoint({
       method: 'POST',
-      path: `/plugin/crud-approve/is2fa-required`,
-      noAuth: true,
-      handler: async ({ body, adminUser, response, cookies }) => {
-        const authRes = this.verifyAuth(cookies);
-        if ('error' in authRes) {
-          response.status = 403;
-          return { error: authRes.error };
-        }
-        
-        const { resourceId } = body;
-        const resource = this.adminforth.config.resources.find((res) => res.resourceId == resourceId);
-        if (!resource) {
-          response.status = 404;
-          return { error: 'Resource not found' };
-        }
-
-        // find crud plugin on the resource
-        const crudApprovePluginInstance = resource.plugins.find((p) => p instanceof CRUDApprovePlugin) as { pluginInstance: CRUDApprovePlugin };
-        if (!crudApprovePluginInstance) {
-          response.status = 400;
-          return { error: 'CRUD Approve Plugin not found on the resource' };
-        }
-
-        if (crudApprovePluginInstance.options.call2faModal !== false) {
-          let call2faModalFunc: (resource: AdminForthResource, action: AllowedActionsEnum, data: Object, user: AdminUser, oldRecord?: Object, extra?: HttpExtra) => Promise<boolean>;
-          if (typeof crudApprovePluginInstance.options.call2faModal === 'function') {
-            call2faModalFunc = crudApprovePluginInstance.options.call2faModal;
-          } else {
-            call2faModalFunc = async () => true;
-          }
-          const call2faModal = await call2faModalFunc(resource, 'any', {}, authRes);
-          return { require2fa: call2faModal };
-        }
-        return { require2fa: false };
-      }
-    })
-    server.endpoint({
-      method: 'POST',
       path: `/plugin/crud-approve/update-status`,
       noAuth: true,
       handler: async ({ body, response, cookies }) => {
@@ -480,23 +312,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         const adminUser = authRes.authRes;
 
         const { resourceId, diffId, recordId, action, approved, code } = body;
-        if (this.options.call2faModal === true) {
-          const verificationResult = code;
-          if (!verificationResult) {
-            return { ok: false, error: 'No verification result provided' };
-          }
-          const t2fa = this.adminforth.getPluginByClassName<TwoFactorsAuthPlugin>('TwoFactorsAuthPlugin');
-          const result = await t2fa.verify(verificationResult, {
-            adminUser: adminUser,
-            userPk: adminUser.pk,
-            cookies: cookies
-          });
-
-          if (!result?.ok) {
-            return { ok: false, error: result?.error ?? 'Provided 2fa verification data is invalid' };
-          }
-        }
-        
         const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
           Filters.EQ(this.options.resourceColumns.idColumnName, diffId),
         )
