@@ -58,17 +58,13 @@ async function sendApproveRequest(approved) {
 
 function initDiffFile() {
   const file = generateDiffFile(
-    'diff.json',
-    oldContent.slice(2, -1),
-    'diff.json',
-    newContent.slice(2, -1),
-    'json',
-    'json'
+    'diff.json', oldContent.slice(2, -1),
+    'diff.json', newContent.slice(2, -1),
+    'json', 'json'
   );
   file.initTheme(theme.value === 'dark' ? 'dark' : 'light');
   file.init();
   file.buildUnifiedDiffLines();
-  console.log('diff file', file);
   diffFile.value = file;
 }
 

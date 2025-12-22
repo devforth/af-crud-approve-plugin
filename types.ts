@@ -2,14 +2,6 @@ import { AdminForthResource, AdminUser, AllowedActionsEnum, HttpExtra } from "ad
 
 export interface PluginOptions {
     /**
-     * User names allowed to perform approve/reject actions. If both allowedUserNames and allowedUserRoles are empty, nobody will be able to approve/reject.
-     */
-    allowedUserNames?: string[];
-    /**
-     * User roles allowed to perform approve/reject actions. If both allowedUserNames and allowedUserRoles are empty, nobody will be able to approve/reject.
-     */
-    allowedUserRoles?: string[];
-    /**
      * Column names mapping in the diff table.
      */
     resourceColumns: {

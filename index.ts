@@ -55,6 +55,10 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
   }
     
   createApprovalRequest = async (resource: AdminForthResource, action: AllowedForReviewActionsEnum, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra) => {
+    if (extra && extra.adminforth_plugin_crud_approve && extra.adminforth_plugin_crud_approve.callingFromApprovalPlugin) {
+      return { ok: true, error: 'Approval request creation aborted to avoid infinite loop' };
+    }
+    
     const recordIdFieldName = resource.columns.find((c) => c.primaryKey === true)?.name;
     const recordId = data?.[recordIdFieldName] || oldRecord?.[recordIdFieldName];
 
@@ -146,7 +150,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     // adminUser: AdminUser, recordId?: any, extra?: HttpExtra
     resource: AdminForthResource, action: AllowedActionsEnum, record: any,
     adminUser: AdminUser, recordId: any, updates: any, oldRecord: any,
-    adminforth: IAdminForth, extra?: HttpExtra
+    adminforth: IAdminForth, extra?: any
   ) => {
     let hooks = [];
     if (action === AllowedActionsEnum.create) {
@@ -157,12 +161,15 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       hooks = resource.hooks.delete.beforeSave;
     }
 
-    if (!hooks[0].toString().includes('this.createApprovalRequest')) {
-      throw new Error(`CRUDApprovePlugin must be the first beforeSave hook on resource ${resource.label} for action ${action}`);
+    // mark that call is from approval plugin to avoid infinite loops
+    console.log('extra before save hooks:', extra);
+    if (extra === undefined) {
+      extra = {};
     }
-    const remainingHooks = hooks.slice(1);
-    console.log('remainingHooks', remainingHooks);
-    for (const hook of remainingHooks) {
+    extra.adminforth_plugin_crud_approve = {
+      callingFromApprovalPlugin: true
+    }
+    for (const hook of hooks) {
       const resp = await hook({ 
         resource, 
         record, 
@@ -397,6 +404,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           updates: {
             [this.options.resourceColumns.statusColumnName]: approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected,
             [this.options.resourceColumns.responserIdColumnName]: authRes.authRes.pk,
+          },
+          extra: {
+            adminforth_plugin_crud_approve: {
+              callingFromApprovalPlugin: true
+            }
           }
         });
         if (r.error) {

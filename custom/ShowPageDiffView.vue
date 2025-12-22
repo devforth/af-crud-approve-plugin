@@ -7,8 +7,9 @@ import { generateDiffFile } from "@git-diff-view/file";
 import { callAdminForthApi } from '@/utils';
 import adminforth from '@/adminforth';
 import { Button } from '@/afcl'
+import { useRouter } from 'vue-router';
 
-
+const router = useRouter();
 const props = defineProps(['column', 'record', 'meta', 'resource', 'adminUser']);
 const coreStore = useCoreStore();
 const theme = computed(() => coreStore.theme);
@@ -40,7 +41,7 @@ async function sendApproveRequest(approved) {
     path: `/plugin/crud-approve/update-status`,
     method: 'POST',
     body: {
-      code: code,
+      // code: code,
       connectorId: props.resource.connectorId,
       resourceId: props.resource.resourceId,
       action: props.record[props.meta.resourceColumns.actionColumnName],
@@ -53,19 +54,15 @@ async function sendApproveRequest(approved) {
     adminforth.alert({ message: `Error: ${data.error}`, variant: 'warning' });
   } else {
     adminforth.alert({ message: `Successfully ${approved ? 'approved' : 'rejected'} the change.`, variant: 'success' });
-    // reload page
-    window.location.reload();
+    router.push(router.currentRoute.value.fullPath.split('/show')[0]);
   }
 }
 
 function initDiffFile() {
   const file = generateDiffFile(
-    'diff.json',
-    oldContent,
-    'diff.json',
-    newContent,
-    'json',
-    'json'
+    'diff.json', oldContent,
+    'diff.json', newContent,
+    'json', 'json'
   );
   file.initTheme(theme.value === 'dark' ? 'dark' : 'light');
   file.init();
