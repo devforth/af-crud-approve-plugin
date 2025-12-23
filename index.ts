@@ -162,8 +162,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       hooks = resource.hooks.delete.beforeSave;
     }
 
-    // mark that call is from approval plugin to avoid infinite loops
-    console.log('extra before save hooks:', extra);
     if (extra === undefined) {
       extra = {};
     }
