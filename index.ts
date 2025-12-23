@@ -340,11 +340,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           const beforeSaveResp = await this.callBeforeSaveHooks(
             resource, action as AllowedActionsEnum, diffData['newRecord'], 
             adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
-            undefined, diffData['oldRecord'], this.adminforth, undefined
+            undefined, diffData['oldRecord'], this.adminforth, {body}
           );
           if (beforeSaveResp.error) {
             response.status = 500;
-            return { error: `FailcallBeforeSaveHooksed to apply approved changes: ${beforeSaveResp.error}` };
+            return { error: `Failed to apply approved changes: ${beforeSaveResp.error}` };
           }
           
           let recordUpdateResult;
@@ -372,7 +372,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             afterSaveResp = await this.callAfterSaveHooks(
               resource, action as AllowedActionsEnum, newRecord, adminUser, 
               diffRecord[this.options.resourceColumns.recordIdColumnName],
-              newRecord, {}, this.adminforth, undefined
+              newRecord, {}, this.adminforth, { body }
             );
           } else if (action === AllowedActionsEnum.edit) {
             const newRecord = diffData['newRecord'];
@@ -381,14 +381,14 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             );
             afterSaveResp = await this.callAfterSaveHooks(
               resource, action as AllowedActionsEnum, newRecord, adminUser, 
-              recordId, newRecord, oldRecord, this.adminforth, undefined
+              recordId, newRecord, oldRecord, this.adminforth, { body }
             );
           } else if (action === AllowedActionsEnum.delete) {
             const newRecord = diffData['newRecord'];
             afterSaveResp = await this.callAfterSaveHooks(
               resource, action as AllowedActionsEnum, newRecord, adminUser, 
               diffRecord[this.options.resourceColumns.recordIdColumnName],
-              {}, diffData['oldRecord'], this.adminforth, undefined
+              {}, diffData['oldRecord'], this.adminforth, { body }
             );
           }
 
@@ -397,7 +397,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             return { error: `Failed to apply approved changes: ${afterSaveResp.error}` };
           }
         }
-
         const r = await this.adminforth.updateResourceRecord({
           resource: this.diffResource, recordId: diffId,
           adminUser: adminUser, oldRecord: diffRecord,

@@ -21,27 +21,13 @@ const newContent = JSON.stringify(props.record[props.meta.resourceColumns.dataCo
 
 const diffFile = ref();
 
-// async function call2faModal() {
-//   const code = await (window).adminforthTwoFaModal.get2FaConfirmationResult?.(undefined, "Approve/Reject Action Confirmation");
-//   if (!code) {
-//     adminforth.alert({ message: '2FA cancelled', variant: 'warning' });
-//     return;
-//   }
-//   return code;
-// }
-
 async function sendApproveRequest(approved) {
-  // const code = await call2faModal();
-  // if (!code) {
-  //   console.log('2FA code not provided, aborting');
-  //   return;
-  // }
-
+  const code = await (window).adminforthTwoFaModal.get2FaConfirmationResult?.(undefined, "Approve/Reject Action Confirmation");
   const data = await callAdminForthApi({
     path: `/plugin/crud-approve/update-status`,
     method: 'POST',
     body: {
-      // code: code,
+      meta: { confirmationResult: code },
       connectorId: props.resource.connectorId,
       resourceId: props.resource.resourceId,
       action: props.record[props.meta.resourceColumns.actionColumnName],
