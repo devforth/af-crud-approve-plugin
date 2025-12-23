@@ -14,6 +14,7 @@ export interface PluginOptions {
         responserIdColumnName: string;
         statusColumnName: string;
         createdAtColumnName: string;
+        extraColumnName: string;
     }
 }
 

@@ -129,6 +129,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       [this.options.resourceColumns.userIdColumnName]: user.pk,
       [this.options.resourceColumns.recordIdColumnName]: recordId,
       [this.options.resourceColumns.createdAtColumnName]: createdAt,
+      [this.options.resourceColumns.extraColumnName]: extra || {},
     }
     const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
     await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
@@ -243,10 +244,8 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       }
     }
     const authRes = await this.adminforth.auth.verify(authCookie, 'auth', true);
-    const username = authRes.username;
-    const userRole = authRes.dbUser.role;
-    if (!this.options.allowedUserNames?.includes(username) && !this.options.allowedUserRoles?.includes(userRole)) {
-      return { error: 'You are not allowed to perform this action', user: undefined };
+    if ('error' in authRes) {
+      return { error: authRes.error, authRes: null };
     }
     return { error: null, authRes: authRes };
   }
@@ -326,7 +325,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           response.status = 404;
           return { error: 'Diff record not found' };
         }
-
+        
         if (diffRecord[this.options.resourceColumns.statusColumnName] !== ApprovalStatusEnum.pending) {
           response.status = 400;
           return { error: 'Diff record is not pending' };
@@ -337,10 +336,12 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
           );
           const diffData = diffRecord[this.options.resourceColumns.dataColumnName];
+          const extra = diffRecord[this.options.resourceColumns.extraColumnName] || {};
+          extra.body = body;
           const beforeSaveResp = await this.callBeforeSaveHooks(
             resource, action as AllowedActionsEnum, diffData['newRecord'], 
             adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
-            undefined, diffData['oldRecord'], this.adminforth, {body}
+            undefined, diffData['oldRecord'], this.adminforth, extra
           );
           if (beforeSaveResp.error) {
             response.status = 500;
