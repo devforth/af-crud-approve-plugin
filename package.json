@@ -1,22 +1,59 @@
 {
-  "name": "af-crud-approve-plugin",
-  "version": "1.0.1",
+  "name": "@adminforth/crud-approve-plugin",
+  "version": "1.0.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Adds manual approval for editing actions. Make your admins blame each other for their mistakes 😉",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "homepage": "https://adminforth.dev/docs/tutorial/Plugins/CRUDApprove/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/devforth/af-crud-approve-plugin.git"
+  },
   "scripts": {
-    "build": "tsc && rsync -av --exclude 'node_modules' custom dist/"
+    "build": "tsc && rsync -av --exclude 'node_modules' custom dist/",
+    "prepare": "npm link adminforth"
   },
-  "keywords": [],
-  "author": "",
+  "author": "devforth",
   "license": "ISC",
-  "description": "",
-  "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "^5.7.3"
-  },
   "dependencies": {
     "@adminforth/two-factors-auth": "^2.9.16",
     "adminforth": "latest"
+  },
+  "peerDependencies": {
+    "adminforth": "^2.13.0-next.51"
+  },
+  "release": {
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      "@semantic-release/npm",
+      "@semantic-release/github",
+      [
+        "semantic-release-slack-bot",
+        {
+          "notifyOnSuccess": true,
+          "notifyOnFail": true,
+          "slackIcon": ":package:",
+          "markdownReleaseNotes": true
+        }
+      ]
+    ],
+    "branches": [
+      "main",
+      {
+        "name": "next",
+        "prerelease": true
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "semantic-release": "^24.2.1",
+    "semantic-release-slack-bot": "^4.0.2",
+    "typescript": "^5.7.3"
   }
 }
