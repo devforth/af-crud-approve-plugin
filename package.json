@@ -1,10 +1,10 @@
 {
   "name": "@adminforth/crud-approve-plugin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publishConfig": {
     "access": "public"
   },
-  "description": "Adds manual approval for editing actions. Make your admins blame each other for their mistakes 😉",
+  "description": "Adds manual approval for actions which mutates state (standard edit&create/custom actions/custom rest apis). Allows your superadmins to prevent admins from misuse",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -21,7 +21,8 @@
   "license": "ISC",
   "dependencies": {
     "@adminforth/two-factors-auth": "^2.9.16",
-    "adminforth": "latest"
+    "dayjs": "^1.11.11",
+    "adminforth": "^2.13.0-next.51"
   },
   "peerDependencies": {
     "adminforth": "^2.13.0-next.51"
