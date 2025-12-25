@@ -54,7 +54,10 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     }
   }
     
-  createApprovalRequest = async (resource: AdminForthResource, action: AllowedForReviewActionsEnum, data: Object, user: AdminUser, oldRecord?: Object, updates?: Object, extra?: HttpExtra) => {
+  createApprovalRequest = async (
+    {resource, action, data, user, oldRecord, updates, extra, record}:
+    {resource: AdminForthResource, action: AllowedForReviewActionsEnum, data: Object, user: AdminUser, record?: Object, oldRecord?: Object, updates?: Object, extra?: HttpExtra}
+  ) => {
     if (extra && extra.adminforth_plugin_crud_approve && extra.adminforth_plugin_crud_approve.callingFromApprovalPlugin) {
       return { ok: true, error: 'Approval request creation aborted to avoid infinite loop' };
     }
@@ -66,7 +69,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     const connector = this.adminforth.connectors[resource.dataSource];
     if (action === AllowedForReviewActionsEnum.create) {
       oldRecord = {};
-      newRecord = updates;
+      newRecord = updates || record;
     } else if (action === AllowedForReviewActionsEnum.edit) {
       newRecord = await connector.getRecordByPrimaryKey(resource, recordId);
       for (const key in updates) { 
@@ -120,7 +123,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     }
 
     const createdAt = dayjs.utc().format();
-    const record = {
+    const diffRecord = {
       [this.options.resourceColumns.idColumnName]: randomUUID(),
       [this.options.resourceColumns.resourceIdColumnName]: resource.resourceId,
       [this.options.resourceColumns.actionColumnName]: action,
@@ -132,7 +135,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       [this.options.resourceColumns.extraColumnName]: extra || {},
     }
     const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
-    await this.adminforth.createResourceRecord({ resource: diffResource, record, adminUser: user});
+    await this.adminforth.createResourceRecord({ resource: diffResource, record: diffRecord, adminUser: user});
     return { ok: true, error: null };
   }
 
