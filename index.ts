@@ -342,7 +342,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           const beforeSaveResp = await this.callBeforeSaveHooks(
             resource, action as AllowedActionsEnum, diffData['newRecord'], 
             adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
-            undefined, diffData['oldRecord'], this.adminforth, extra
+            diffData['newRecord'], diffData['oldRecord'], this.adminforth, extra
           );
           if (beforeSaveResp.error) {
             response.status = 500;
