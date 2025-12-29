@@ -182,14 +182,24 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         updates,
         oldRecord,
       });
-      if (!resp || (!resp.ok && !resp.error)) {
-        throw new Error(`Hook beforeSave must return object with {ok: true} or { error: 'Error' } `);
+      if (!resp || (typeof resp.ok !== 'boolean' && (!resp.error && !resp.newRecordId))) {
+        throw new Error(
+          `Invalid return value from beforeSave hook. Expected: { ok: boolean, error?: string | null, newRecordId?: any }.\n` +
+          `Note: Return { ok: false, error: null, newRecordId } to stop creation and redirect to an existing record.`
+        );
       }
-
+      if (resp.ok === false && !resp.error) {
+        const { error, ok, newRecordId } = resp;
+        return {
+          error: error ?? 'Operation aborted by hook',
+          newRecordId: newRecordId
+        };
+      }
       if (resp.error) {
         return { error: resp.error };
       }
     }
+
     return { ok: true, error: null };
   }
 
@@ -345,6 +355,9 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             diffData['newRecord'], diffData['oldRecord'], this.adminforth, extra
           );
           if (beforeSaveResp.error) {
+            if (beforeSaveResp.error === 'Operation aborted by hook') {
+              return beforeSaveResp;
+            }
             response.status = 500;
             return { error: `Failed to apply approved changes: ${beforeSaveResp.error}` };
           }
