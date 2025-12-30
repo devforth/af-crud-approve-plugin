@@ -36,7 +36,7 @@ async function sendApproveRequest(approved) {
       approved: approved
     }
   });
-  if (data.error) {
+  if (data.error && data.error !== 'Operation aborted by hook') {
     adminforth.alert({ message: `Error: ${data.error}`, variant: 'warning' });
   } else {
     adminforth.alert({ message: `Successfully ${approved ? 'approved' : 'rejected'} the change.`, variant: 'success' });
