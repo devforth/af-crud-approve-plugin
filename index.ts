@@ -349,10 +349,16 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           const diffData = diffRecord[this.options.resourceColumns.dataColumnName];
           const extra = diffRecord[this.options.resourceColumns.extraColumnName] || {};
           extra.body = body;
+          let oldRecord = undefined;
+          if (action !== AllowedActionsEnum.create) {
+            oldRecord = await this.adminforth.connectors[resource.dataSource].getRecordByPrimaryKey(
+              resource, diffRecord[this.options.resourceColumns.recordIdColumnName]
+            );
+          }
           const beforeSaveResp = await this.callBeforeSaveHooks(
             resource, action as AllowedActionsEnum, diffData['newRecord'], 
             adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
-            diffData['newRecord'], diffData['oldRecord'], this.adminforth, extra
+            diffData['newRecord'], oldRecord, this.adminforth, extra
           );
           if (beforeSaveResp.error) {
             if (beforeSaveResp.error === 'Operation aborted by hook') {
