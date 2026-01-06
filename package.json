@@ -1,6 +1,6 @@
 {
   "name": "@adminforth/crud-approve-plugin",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "publishConfig": {
     "access": "public"
   },

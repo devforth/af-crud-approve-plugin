@@ -349,6 +349,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           const diffData = diffRecord[this.options.resourceColumns.dataColumnName];
           const extra = diffRecord[this.options.resourceColumns.extraColumnName] || {};
           extra.body = body;
+          extra.cookies = cookies;
           let oldRecord = undefined;
           if (action !== AllowedActionsEnum.create) {
             oldRecord = await this.adminforth.connectors[resource.dataSource].getRecordByPrimaryKey(
