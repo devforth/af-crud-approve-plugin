@@ -361,7 +361,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
             diffData['newRecord'], oldRecord, this.adminforth, extra
           );
-          if (beforeSaveResp.error !== 'Operation aborted by hook') {
+          if (beforeSaveResp.error && beforeSaveResp.error !== 'Operation aborted by hook') {
             response.status = 500;
             return { error: `Failed to apply approved changes: ${beforeSaveResp.error}` };
           }
