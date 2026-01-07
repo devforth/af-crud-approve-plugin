@@ -20,7 +20,11 @@ const diffFile = ref();
 
 
 async function sendApproveRequest(approved) {
-  const code = await (window).adminforthTwoFaModal.get2FaConfirmationResult?.(undefined, "Approve/Reject Action Confirmation");
+  let code = '123456'
+  if (approved) {
+    code = await (window).adminforthTwoFaModal.get2FaConfirmationResult?.(undefined, "Approve Action Confirmation");
+  }
+  
   const data = await callAdminForthApi({
     path: `/plugin/crud-approve/update-status`,
     method: 'POST',
