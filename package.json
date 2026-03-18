@@ -14,8 +14,7 @@
     "url": "https://github.com/devforth/af-crud-approve-plugin.git"
   },
   "scripts": {
-    "build": "tsc && rsync -av --exclude 'node_modules' custom dist/",
-    "prepare": "npm link adminforth"
+    "build": "tsc && rsync -av --exclude 'node_modules' custom dist/"
   },
   "author": "devforth",
   "license": "ISC",
@@ -25,7 +24,7 @@
     "dayjs": "^1.11.11"
   },
   "peerDependencies": {
-    "adminforth": "next"
+    "adminforth": "^2.24.0"
   },
   "release": {
     "plugins": [
@@ -36,6 +35,7 @@
       [
         "semantic-release-slack-bot",
         {
+          "packageName": "@adminforth/crud-approve-plugin",
           "notifyOnSuccess": true,
           "notifyOnFail": true,
           "slackIcon": ":package:",
