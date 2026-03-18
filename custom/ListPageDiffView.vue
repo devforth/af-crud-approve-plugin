@@ -43,7 +43,7 @@ async function sendApproveRequest(approved) {
   } else {
     adminforth.alert({ message: `Successfully ${approved ? 'approved' : 'rejected'} the change.`, variant: 'success' });
     // reload page
-    window.location.reload();
+    adminforth.list.refresh();
   }
 }
 
