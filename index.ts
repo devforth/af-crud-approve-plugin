@@ -58,6 +58,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     {resource, action, data, user, oldRecord, updates, extra, record}:
     {resource: AdminForthResource, action: AllowedForReviewActionsEnum, data: Object, user: AdminUser, record?: Object, oldRecord?: Object, updates?: Object, extra?: HttpExtra}
   ) => {
+    //@ts-ignore
     if (extra && extra.adminforth_plugin_crud_approve && extra.adminforth_plugin_crud_approve.callingFromApprovalPlugin) {
       return { ok: true, error: 'Approval request creation aborted to avoid infinite loop' };
     }
@@ -168,8 +169,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     if (extra === undefined) {
       extra = {};
     }
+    //@ts-ignore
     extra.adminforth_plugin_crud_approve = {
+      //@ts-ignore
       callingFromApprovalPlugin: true
+      //@ts-ignore
     }
     for (const hook of hooks) {
       const resp = await hook({ 
@@ -427,8 +431,11 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             [this.options.resourceColumns.responserIdColumnName]: authRes.authRes.pk,
           },
           extra: {
+            //@ts-ignore
             adminforth_plugin_crud_approve: {
+              //@ts-ignore
               callingFromApprovalPlugin: true
+              //@ts-ignore
             }
           }
         });
