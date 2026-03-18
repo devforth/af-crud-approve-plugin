@@ -267,6 +267,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
 
   createRecord = async (resource: AdminForthResource, diffData: any, adminUser: AdminUser) => {
     const connector = this.adminforth.connectors[resource.dataSource];
+    //@ts-ignore
     const err = this.adminforth.validateRecordValues(resource, diffData['newRecord'], 'create');
     if (err) {
       return { ok: false, error: err, createdRecord: null };
@@ -284,6 +285,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
   editRecord = async (resource: AdminForthResource, diffData: any, targetRecordId: any, connector: IAdminForthDataSourceConnectorBase) => {
     let oldRecord;
     const dataToUse = diffData['newRecord'];
+    //@ts-ignore
     const err = this.adminforth.validateRecordValues(resource, dataToUse, 'edit', targetRecordId);
     if (err) {
       return { error: err };
@@ -397,6 +399,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
               afterSaveResp = await this.callAfterSaveHooks(
                 resource, action as AllowedActionsEnum, newRecord, adminUser, 
                 diffRecord[this.options.resourceColumns.recordIdColumnName],
+                //@ts-ignore
                 newRecord, {}, this.adminforth, { body }
               );
             } else if (action === AllowedActionsEnum.edit) {
@@ -406,6 +409,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
               );
               afterSaveResp = await this.callAfterSaveHooks(
                 resource, action as AllowedActionsEnum, newRecord, adminUser, 
+                //@ts-ignore
                 recordId, newRecord, oldRecord, this.adminforth, { body }
               );
             } else if (action === AllowedActionsEnum.delete) {
@@ -413,6 +417,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
               afterSaveResp = await this.callAfterSaveHooks(
                 resource, action as AllowedActionsEnum, newRecord, adminUser, 
                 diffRecord[this.options.resourceColumns.recordIdColumnName],
+                //@ts-ignore
                 {}, diffData['oldRecord'], this.adminforth, { body }
               );
             }
