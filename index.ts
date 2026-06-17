@@ -329,6 +329,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       handler: async ({ body, response, cookies }) => {
         const authRes = await this.verifyAuth(cookies);
         if (authRes.error) {
+          //@ts-ignore
           response.status = 403;
           return { error: authRes.error };
         }
@@ -339,11 +340,13 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           Filters.EQ(this.options.resourceColumns.idColumnName, diffId),
         )
         if (!diffRecord) {
+          //@ts-ignore
           response.status = 404;
           return { error: 'Diff record not found' };
         }
         
         if (diffRecord[this.options.resourceColumns.statusColumnName] !== ApprovalStatusEnum.pending) {
+          //@ts-ignore
           response.status = 400;
           return { error: 'Diff record is not pending' };
         }
@@ -368,6 +371,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             diffData['newRecord'], oldRecord, this.adminforth, extra
           );
           if (beforeSaveResp.error && beforeSaveResp.error !== 'Operation aborted by hook') {
+            //@ts-ignore
             response.status = 500;
             return { error: `Failed to apply approved changes: ${beforeSaveResp.error}` };
           }
@@ -388,6 +392,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
               );
             }
             if (recordUpdateResult?.error) {
+              //@ts-ignore
               response.status = 500;
               console.error('Error applying approved changes:', recordUpdateResult);
               return { error: `Failed to apply approved changes: ${recordUpdateResult.error}` };
@@ -423,6 +428,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             }
 
             if (afterSaveResp?.error) {
+              //@ts-ignore
               response.status = 500;
               return { error: `Failed to apply approved changes: ${afterSaveResp.error}` };
             }
@@ -445,6 +451,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           }
         });
         if (r.error) {
+          //@ts-ignore
           response.status = 500;
           return { error: `Failed to update diff record status: ${r.error}` };
         }
