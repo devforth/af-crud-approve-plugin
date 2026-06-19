@@ -22,7 +22,7 @@ const diffFile = ref();
 async function sendApproveRequest(approved) {
   let code = '123456'
   if (approved) {
-    code = await (window).adminforthTwoFaModal.get2FaConfirmationResult?.("Approve Action Confirmation");
+    code = await (window).adminforthTwoFaModal?.get2FaConfirmationResult?.("Approve Action Confirmation");
   }
   
   const data = await callAdminForthApi({
