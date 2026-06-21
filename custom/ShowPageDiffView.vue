@@ -22,16 +22,10 @@ const newContent = JSON.stringify(props.record[props.meta.resourceColumns.dataCo
 const diffFile = ref();
 
 async function sendApproveRequest(approved) {
-    let code = '123456'
-    if (approved) {
-      code = await (window).adminforthTwoFaModal?.get2FaConfirmationResult?.("Approve Action Confirmation");
-    }
-
   const data = await callAdminForthApi({
     path: `/plugin/crud-approve/update-status`,
     method: 'POST',
     body: {
-      meta: { confirmationResult: code },
       connectorId: props.resource.connectorId,
       resourceId: props.resource.resourceId,
       action: props.record[props.meta.resourceColumns.actionColumnName],
