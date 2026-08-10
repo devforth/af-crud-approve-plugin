@@ -250,7 +250,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       }
     }
   }
-
+ 
   createRecord = async (resource: AdminForthResource, diffData: any, adminUser: AdminUser) => {
     const connector = this.adminforth.connectors[resource.dataSource];
     //@ts-ignore
