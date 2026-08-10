@@ -1,4 +1,4 @@
-import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer } from "adminforth";
+import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer, interpretResource } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { AllowedForReviewActionsEnum, ApprovalStatusEnum, type PluginOptions } from './types.js';
 
@@ -251,20 +251,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     }
   }
 
-  verifyAuth = async (cookies: Array<{key: string, value: string}>) => {
-    let authCookie;
-    for (const i in cookies) {
-      if (cookies[i].key === `adminforth_${this.adminforth.config.customization.brandNameSlug}_jwt`) {
-        authCookie = cookies[i].value;
-      }
-    }
-    const authRes = await this.adminforth.auth.verify(authCookie, 'auth', true);
-    if ('error' in authRes) {
-      return { error: authRes.error, authRes: null };
-    }
-    return { error: null, authRes: authRes };
-  }
-
   createRecord = async (resource: AdminForthResource, diffData: any, adminUser: AdminUser) => {
     const connector = this.adminforth.connectors[resource.dataSource];
     //@ts-ignore
@@ -325,17 +311,9 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     server.endpoint({
       method: 'POST',
       path: `/plugin/crud-approve/update-status`,
-      noAuth: true,
-      handler: async ({ body, response, cookies }) => {
-        const authRes = await this.verifyAuth(cookies);
-        if (authRes.error) {
-          //@ts-ignore
-          response.status = 403;
-          return { error: authRes.error };
-        }
-        const adminUser = authRes.authRes;
+      handler: async ({ body, response, cookies, adminUser }) => {
 
-        const { resourceId, diffId, recordId, action, approved, code } = body;
+        const { diffId, approved, code } = body;
         const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
           Filters.EQ(this.options.resourceColumns.idColumnName, diffId),
         )
@@ -350,11 +328,54 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           response.status = 400;
           return { error: 'Diff record is not pending' };
         }
+
+        const action = diffRecord[this.options.resourceColumns.actionColumnName];
+        const recordId = diffRecord[this.options.resourceColumns.recordIdColumnName];
+        const targetResource = this.adminforth.config.resources.find(
+          (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
+        );
+
+        const diffResource = this.adminforth.config.resources.find(
+          (res) => res.resourceId === this.diffResource.resourceId
+        );
+        const { allowedActions } = await interpretResource(
+          adminUser,
+          diffResource,
+          { requestBody: body, pk: diffId, record: diffRecord },
+          ActionCheckSource.ShowRequest,
+          this.adminforth
+        );
+        const showAllowed = allowedActions[AllowedActionsEnum.show] as boolean | string | undefined;
+        if (showAllowed !== true) {
+          //@ts-ignore
+          response.status = 403;
+          return {
+            error: typeof showAllowed === 'string'
+              ? showAllowed
+              : 'You do not have permission to approve or reject this change request'
+          };
+        }
+
+        // separation of duties: author of the request is not a valid reviewer for it
+        const requesterId = diffRecord[this.options.resourceColumns.userIdColumnName];
+        if (!this.options.allowSelfApproval
+            && requesterId !== undefined && requesterId !== null
+            && `${requesterId}` === `${adminUser.pk}`) {
+          //@ts-ignore
+          response.status = 403;
+          return { error: 'You can not approve or reject your own change request' };
+        }
+
         let beforeSaveResp;
         if (approved === true) {
-          const resource = this.adminforth.config.resources.find(
-            (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
-          );
+          if (!targetResource) {
+            //@ts-ignore
+            response.status = 404;
+            return {
+              error: `Resource ${diffRecord[this.options.resourceColumns.resourceIdColumnName]} not found`
+            };
+          }
+          const resource = targetResource;
           const diffData = diffRecord[this.options.resourceColumns.dataColumnName];
           const extra = diffRecord[this.options.resourceColumns.extraColumnName] || {};
           extra.body = body;
@@ -439,7 +460,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           adminUser: adminUser, oldRecord: diffRecord,
           updates: {
             [this.options.resourceColumns.statusColumnName]: approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected,
-            [this.options.resourceColumns.responserIdColumnName]: authRes.authRes.pk,
+            [this.options.resourceColumns.responserIdColumnName]: adminUser.pk,
           },
           extra: {
             //@ts-ignore

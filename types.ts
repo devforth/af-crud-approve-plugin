@@ -16,6 +16,12 @@ export interface PluginOptions {
         createdAtColumnName: string;
         extraColumnName: string;
     }
+
+    /**
+     * By default the user who created the approval request can't approve or reject it himself
+     * (separation of duties / four-eyes principle). Set to true to disable this check.
+     */
+    allowSelfApproval?: boolean;
 }
 
 export enum AllowedForReviewActionsEnum {
