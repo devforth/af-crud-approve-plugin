@@ -15,6 +15,7 @@ const theme = computed(() => coreStore.theme);
 
 const oldContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].oldRecord, null, 2)
 const newContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].newRecord, null, 2)
+const hasChanges = oldContent !== newContent;
 
 const diffFile = ref();
 
@@ -53,7 +54,9 @@ function initDiffFile() {
   diffFile.value = file;
 }
 
-initDiffFile();
+if (hasChanges) {
+  initDiffFile();
+}
 
 watch([theme], ([t]) => {
   if (!diffFile.value) return;
@@ -65,6 +68,7 @@ watch([theme], ([t]) => {
 
 <template>
   <DiffView
+    v-if="hasChanges"
     :diff-file="diffFile"
     :diff-view-mode="DiffModeEnum.Unified"
     :diff-view-theme="theme === 'dark' ? 'dark' : 'light'"
@@ -72,6 +76,7 @@ watch([theme], ([t]) => {
     :diff-view-wrap="true"
     :diff-view-font-size="14"
   />
+  <div v-else>No changes</div>
   <div v-if="record[meta.resourceColumns.statusColumnName] === 1" style="margin-top: 16px; display: flex; gap: 8px;">
     <Button style="background-color: green; color: white;" @click="sendApproveRequest(true)" :loader="false" class="w-full">Approve</Button>
     <Button style="background-color: red; color: white;" @click="sendApproveRequest(false)" :loader="false" class="w-full">Reject</Button>
