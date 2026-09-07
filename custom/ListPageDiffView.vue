@@ -43,8 +43,8 @@ async function sendApproveRequest(approved) {
 
 function initDiffFile() {
   const file = generateDiffFile(
-    'diff.json', oldContent.slice(2, -1),
-    'diff.json', newContent.slice(2, -1),
+    'diff.json', oldContent,
+    'diff.json', newContent,
     'json', 'json'
   );
   file.initTheme(theme.value === 'dark' ? 'dark' : 'light');
@@ -77,4 +77,3 @@ watch([theme], ([t]) => {
     <Button style="background-color: red; color: white;" @click="sendApproveRequest(false)" :loader="false" class="w-full">Reject</Button>
   </div>
 </template>
-  
