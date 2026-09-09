@@ -1,4 +1,4 @@
-import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer, interpretResource } from "adminforth";
+import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer, interpretResource, isBackendOnly, stripBackendOnly } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { AllowedForReviewActionsEnum, ApprovalStatusEnum, type PluginOptions } from './types.js';
 
@@ -80,39 +80,35 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       oldRecord = await connector.getRecordByPrimaryKey(resource, recordId);
     }
 
-    const checks = await Promise.all(
-      resource.columns.map(async (c) => {
-        if (typeof c.backendOnly === "function") {
-          const result = await c.backendOnly({
-            adminUser: user,
-            resource,
-            meta: {},
-            source: ActionCheckSource.ShowRequest,
-            adminforth: this.adminforth,
-          });
-          return { col: c, result };
-        }
-        return { col: c, result: c.backendOnly ?? false };
-      })
-    );
+    oldRecord = oldRecord || {};
+    newRecord = newRecord || {};
 
-    const backendOnlyColumns = checks
-      .filter(({ result }) => result === true)
-      .map(({ col }) => col);
-    
-    backendOnlyColumns.forEach((c) => {
-      if (JSON.stringify(oldRecord[c.name]) != JSON.stringify(newRecord[c.name])) {
-        if (action !== AllowedForReviewActionsEnum.delete) {
-          newRecord[c.name] = '<hidden value after>'
-        }
-        if (action !== AllowedForReviewActionsEnum.create) {
-          oldRecord[c.name] = '<hidden value before>'
-        }
-      } else {
-        delete oldRecord[c.name];
-        delete newRecord[c.name];
+    const columnAccessCtx = {
+      adminUser: user,
+      resource,
+      meta: { pk: recordId, requestBody: extra?.body },
+      source: ActionCheckSource.ShowRequest,
+      adminforth: this.adminforth,
+    };
+
+    // collected before the strip below deletes the values it compares
+    const changedHiddenColumns: string[] = [];
+    for (const c of resource.columns) {
+      if (await isBackendOnly(c, columnAccessCtx)
+          && JSON.stringify(oldRecord[c.name]) !== JSON.stringify(newRecord[c.name])) {
+        changedHiddenColumns.push(c.name);
       }
-    });
+    }
+    await stripBackendOnly(oldRecord, columnAccessCtx);
+    await stripBackendOnly(newRecord, columnAccessCtx);
+    for (const name of changedHiddenColumns) {
+      if (action !== AllowedForReviewActionsEnum.delete) {
+        newRecord[name] = '<hidden value after>';
+      }
+      if (action !== AllowedForReviewActionsEnum.create) {
+        oldRecord[name] = '<hidden value before>';
+      }
+    }
 
     if (action === AllowedForReviewActionsEnum.edit) {
       for (const key in oldRecord) {
