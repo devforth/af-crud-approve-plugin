@@ -1,93 +1,17 @@
 <script setup>
-import { useCoreStore } from '@/stores/core';
-import { computed, ref, watch } from 'vue';
-import "@git-diff-view/vue/styles/diff-view.css";
-import { DiffView, DiffModeEnum } from "@git-diff-view/vue";
-import { generateDiffFile } from "@git-diff-view/file";
-import { callAdminForthApi } from '@/utils';
-import adminforth from '@/adminforth';
-import { Button } from '@/afcl'
 import { useRouter } from 'vue-router';
+import ApprovalDiff from './ApprovalDiff.vue';
 
 const router = useRouter();
 const props = defineProps(['column', 'record', 'meta', 'resource', 'adminUser']);
-const coreStore = useCoreStore();
-const theme = computed(() => coreStore.theme);
-const isMobile = computed(() => /(Android|iPhone|iPad|iPod)/i.test(navigator.userAgent));
-const mode = computed(() => isMobile.value ? DiffModeEnum.Unified : DiffModeEnum.Split);
-
-const oldContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].oldRecord, null, 2)
-const newContent = JSON.stringify(props.record[props.meta.resourceColumns.dataColumnName].newRecord, null, 2)
-const hasChanges = oldContent !== newContent;
-
-const diffFile = ref();
-
-async function sendApproveRequest(approved) {
-  const data = await callAdminForthApi({
-    path: `/plugin/crud-approve/update-status`,
-    method: 'POST',
-    body: {
-      connectorId: props.resource.connectorId,
-      resourceId: props.resource.resourceId,
-      action: props.record[props.meta.resourceColumns.actionColumnName],
-      recordId: props.record[props.meta.resourceColumns.recordIdColumnName],
-      diffId: props.record[props.meta.resourceColumns.idColumnName],
-      approved: approved
-    }
-  });
-  if (data.error && data.error !== 'Operation aborted by hook') {
-    adminforth.alert({ message: `Error: ${data.error}`, variant: 'warning' });
-  } else {
-    adminforth.alert({ message: `Successfully ${approved ? 'approved' : 'rejected'} the change.`, variant: 'success' });
-    router.push(router.currentRoute.value.fullPath.split('/show')[0]);
-  }
-}
-
-function initDiffFile() {
-  const file = generateDiffFile(
-    'diff.json', oldContent,
-    'diff.json', newContent,
-    'json', 'json'
-  );
-  file.initTheme(theme.value === 'dark' ? 'dark' : 'light');
-  file.init();
-  if (mode.value === DiffModeEnum.Split) {
-    file.buildSplitDiffLines();
-  } else {
-    file.buildUnifiedDiffLines();
-  }
-  diffFile.value = file;
-}
-
-if (hasChanges) {
-  initDiffFile();
-}
-
-watch([mode, theme], ([m, t]) => {
-  if (!diffFile.value) return;
-  diffFile.value.initTheme(t === 'dark' ? 'dark' : 'light');
-  if (m === DiffModeEnum.Split) {
-    diffFile.value.buildSplitDiffLines();
-  } else {
-    diffFile.value.buildUnifiedDiffLines();
-  }
-});
-
 </script>
 
 <template>
-  <DiffView
-    v-if="hasChanges"
-    :diff-file="diffFile"
-    :diff-view-mode="mode"
-    :diff-view-theme="theme === 'dark' ? 'dark' : 'light'"
-    :diff-view-highlight="true"
-    :diff-view-wrap="true"
-    :diff-view-font-size="14"
+  <ApprovalDiff
+    :record="record"
+    :meta="meta"
+    :resource="resource"
+    splitWhenWide
+    @decided="router.push({ name: 'resource-list', params: { resourceId: resource.resourceId } })"
   />
-  <div v-else>No changes</div>
-  <div v-if="record[meta.resourceColumns.statusColumnName] === 1" style="margin-top: 16px; display: flex; gap: 8px;">
-    <Button style="background-color: green; color: white;" @click="sendApproveRequest(true)" :loader="false" class="w-full">Approve</Button>
-    <Button style="background-color: red; color: white;" @click="sendApproveRequest(false)" :loader="false" class="w-full">Reject</Button>
-  </div>
 </template>
