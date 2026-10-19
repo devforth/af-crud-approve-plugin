@@ -176,9 +176,10 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       //@ts-ignore
     }
     for (const hook of hooks) {
-      const resp = await hook({ 
-        resource, 
-        record, 
+      const resp = await hook({
+        resource,
+        // edit hooks get the changed fields only in updates, like in core
+        ...(action === AllowedActionsEnum.edit ? {} : { record }),
         adminUser,
         recordId,
         adminforth: this.adminforth,
@@ -186,17 +187,17 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         updates,
         oldRecord,
       });
-      if (!resp || (typeof resp.ok !== 'boolean' && (!resp.error && !resp.newRecordId))) {
+      if (!resp || (typeof resp.ok !== 'boolean' && (!resp.error && !resp.redirectToRecordId))) {
         throw new Error(
-          `Invalid return value from beforeSave hook. Expected: { ok: boolean, error?: string | null, newRecordId?: any }.\n` +
-          `Note: Return { ok: false, error: null, newRecordId } to stop creation and redirect to an existing record.`
+          `Invalid return value from beforeSave hook. Expected: { ok: boolean, error?: string | null, redirectToRecordId?: any }.\n` +
+          `Note: Return { ok: false, error: null, redirectToRecordId } to stop creation and redirect to an existing record.`
         );
       }
       if (resp.ok === false && !resp.error) {
-        const { error, ok, newRecordId } = resp;
+        const { error, redirectToRecordId } = resp;
         return {
           error: error ?? 'Operation aborted by hook',
-          newRecordId: newRecordId
+          redirectToRecordId,
         };
       }
       if (resp.error) {
@@ -233,7 +234,7 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     for (const hook of hooks) {
       const resp = await hook({
         resource,
-        record,
+        ...(action === AllowedActionsEnum.edit ? {} : { record }),
         adminUser,
         recordId,
         adminforth: this.adminforth,
