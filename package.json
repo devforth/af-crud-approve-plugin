@@ -19,7 +19,6 @@
   "author": "devforth",
   "license": "ISC",
   "dependencies": {
-    "@adminforth/two-factors-auth": "^2.10.4",
     "dayjs": "^1.11.11"
   },
   "peerDependencies": {
