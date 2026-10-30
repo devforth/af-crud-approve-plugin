@@ -1,4 +1,4 @@
-import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer, interpretResource } from "adminforth";
+import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { AllowedForReviewActionsEnum, ApprovalStatusEnum, type PluginOptions } from './types.js';
 
@@ -135,8 +135,12 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       [this.options.resourceColumns.createdAtColumnName]: createdAt,
       [this.options.resourceColumns.extraColumnName]: extra || {},
     }
-    const diffResource = this.adminforth.config.resources.find((r) => r.resourceId === this.diffResource.resourceId);
-    await this.adminforth.createResourceRecord({ resource: diffResource, record: diffRecord, adminUser: user});
+    const { error } = await this.adminforth.resource(this.diffResource.resourceId)
+      .asSystem({ adminUser: user })
+      .create(diffRecord);
+    if (error) {
+      return { ok: false, error };
+    }
     return { ok: true, error: null };
   }
 
@@ -323,7 +327,24 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
           response.status = 404;
           return { error: 'Diff record not found' };
         }
-        
+
+        // the show permission of the approval resource is the approval permission, meta.record lets it
+        // depend on the request being reviewed, and the row scope of the approval resource applies too
+        try {
+          const visibleDiffRecord = await this.adminforth.resource(this.diffResource.resourceId)
+            .asUser(adminUser, { meta: { requestBody: body, pk: diffId, record: diffRecord } })
+            .get(Filters.EQ(this.options.resourceColumns.idColumnName, diffId));
+          if (!visibleDiffRecord) {
+            //@ts-ignore
+            response.status = 404;
+            return { error: 'Diff record not found' };
+          }
+        } catch (e) {
+          //@ts-ignore
+          response.status = 403;
+          return { error: (e as Error).message };
+        }
+
         if (diffRecord[this.options.resourceColumns.statusColumnName] !== ApprovalStatusEnum.pending) {
           //@ts-ignore
           response.status = 400;
@@ -335,27 +356,6 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
         const targetResource = this.adminforth.config.resources.find(
           (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
         );
-
-        const diffResource = this.adminforth.config.resources.find(
-          (res) => res.resourceId === this.diffResource.resourceId
-        );
-        const { allowedActions } = await interpretResource(
-          adminUser,
-          diffResource,
-          { requestBody: body, pk: diffId, record: diffRecord },
-          ActionCheckSource.ShowRequest,
-          this.adminforth
-        );
-        const showAllowed = allowedActions[AllowedActionsEnum.show] as boolean | string | undefined;
-        if (showAllowed !== true) {
-          //@ts-ignore
-          response.status = 403;
-          return {
-            error: typeof showAllowed === 'string'
-              ? showAllowed
-              : 'You do not have permission to approve or reject this change request'
-          };
-        }
 
         // separation of duties: author of the request is not a valid reviewer for it
         const requesterId = diffRecord[this.options.resourceColumns.userIdColumnName];
@@ -456,22 +456,18 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
             }
           }
         }
-        const r = await this.adminforth.updateResourceRecord({
-          resource: this.diffResource, recordId: diffId,
-          adminUser: adminUser, oldRecord: diffRecord,
-          updates: {
+        // the approval resource is not editable for users, the status is plugin bookkeeping
+        const r = await this.adminforth.resource(this.diffResource.resourceId)
+          .asSystem({
+            adminUser,
+            oldRecord: diffRecord,
+            //@ts-ignore
+            extra: { adminforth_plugin_crud_approve: { callingFromApprovalPlugin: true } },
+          })
+          .update(diffId, {
             [this.options.resourceColumns.statusColumnName]: approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected,
             [this.options.resourceColumns.responserIdColumnName]: adminUser.pk,
-          },
-          extra: {
-            //@ts-ignore
-            adminforth_plugin_crud_approve: {
-              //@ts-ignore
-              callingFromApprovalPlugin: true
-              //@ts-ignore
-            }
-          }
-        });
+          });
         if (r.error) {
           //@ts-ignore
           response.status = 500;
