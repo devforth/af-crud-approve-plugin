@@ -52,6 +52,26 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
       columnName: this.options.resourceColumns.createdAtColumnName,
       direction: AdminForthSortDirections.desc
     }
+    const bulkOnly = { list: false, listThreeDotsMenu: false, showButton: false, showThreeDotsMenu: false, bulkButton: true };
+    resourceConfig.options.actions.push(
+      {
+        id: 'crud_approve_bulk_approve',
+        name: 'Approve',
+        icon: 'lucide:check',
+        bulkConfirmationMessage: 'Approve the selected requests? Their changes are applied right away.',
+        showIn: bulkOnly,
+        bulkHandler: ({ recordIds, adminUser, extra }) => this.bulkUpdateStatus(recordIds, true, adminUser, extra?.cookies),
+      },
+      {
+        id: 'crud_approve_bulk_reject',
+        name: 'Reject',
+        icon: 'lucide:x',
+        bulkConfirmationMessage: 'Reject the selected requests?',
+        bulkDangerous: true,
+        showIn: bulkOnly,
+        bulkHandler: ({ recordIds, adminUser, extra }) => this.bulkUpdateStatus(recordIds, false, adminUser, extra?.cookies),
+      },
+    );
   }
     
   createApprovalRequest = async (
@@ -312,171 +332,183 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
     return await connector.deleteRecord({ resource, recordId: targetRecordId });
   }
 
+  updateStatus = async (
+    { diffId, approved, adminUser, body, cookies }:
+    { diffId: string, approved: boolean, adminUser: AdminUser, body: any, cookies: any }
+  ): Promise<{ ok?: boolean, error?: string, status?: number }> => {
+    const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
+      Filters.EQ(this.options.resourceColumns.idColumnName, diffId),
+    )
+    if (!diffRecord) {
+      return { status: 404, error: 'Diff record not found' };
+    }
+
+    // the show permission of the approval resource is the approval permission, meta.record lets it
+    // depend on the request being reviewed, and the row scope of the approval resource applies too
+    try {
+      const visibleDiffRecord = await this.adminforth.resource(this.diffResource.resourceId)
+        .asUser(adminUser, { meta: { requestBody: body, pk: diffId, record: diffRecord } })
+        .get(Filters.EQ(this.options.resourceColumns.idColumnName, diffId));
+      if (!visibleDiffRecord) {
+        return { status: 404, error: 'Diff record not found' };
+      }
+    } catch (e) {
+      return { status: 403, error: (e as Error).message };
+    }
+
+    if (diffRecord[this.options.resourceColumns.statusColumnName] !== ApprovalStatusEnum.pending) {
+      return { status: 400, error: 'Diff record is not pending' };
+    }
+
+    const action = diffRecord[this.options.resourceColumns.actionColumnName];
+    const recordId = diffRecord[this.options.resourceColumns.recordIdColumnName];
+    const targetResource = this.adminforth.config.resources.find(
+      (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
+    );
+
+    // separation of duties: author of the request is not a valid reviewer for it
+    const requesterId = diffRecord[this.options.resourceColumns.userIdColumnName];
+    if (!this.options.allowSelfApproval
+        && requesterId !== undefined && requesterId !== null
+        && `${requesterId}` === `${adminUser.pk}`) {
+      return { status: 403, error: 'You can not approve or reject your own change request' };
+    }
+
+    let beforeSaveResp;
+    if (approved === true) {
+      if (!targetResource) {
+        return {
+          status: 404,
+          error: `Resource ${diffRecord[this.options.resourceColumns.resourceIdColumnName]} not found`
+        };
+      }
+      const resource = targetResource;
+      const diffData = diffRecord[this.options.resourceColumns.dataColumnName];
+      const extra = diffRecord[this.options.resourceColumns.extraColumnName] || {};
+      extra.body = body;
+      extra.cookies = cookies;
+      let oldRecord = undefined;
+      if (action !== AllowedActionsEnum.create) {
+        oldRecord = await this.adminforth.connectors[resource.dataSource].getRecordByPrimaryKey(
+          resource, diffRecord[this.options.resourceColumns.recordIdColumnName]
+        );
+      }
+      beforeSaveResp = await this.callBeforeSaveHooks(
+        resource, action as AllowedActionsEnum, diffData['newRecord'], 
+        adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
+        diffData['newRecord'], oldRecord, this.adminforth, extra
+      );
+      if (beforeSaveResp.error && beforeSaveResp.error !== 'Operation aborted by hook') {
+        return { status: 500, error: `Failed to apply approved changes: ${beforeSaveResp.error}` };
+      }
+      
+
+      if (beforeSaveResp.error !== 'Operation aborted by hook') {
+        let recordUpdateResult;
+        const connector = this.adminforth.connectors[resource.dataSource];
+        if (action === AllowedActionsEnum.create) {
+          recordUpdateResult = await this.createRecord(resource, diffData, adminUser);
+        } else if (action === AllowedActionsEnum.edit) {
+          recordUpdateResult = await this.editRecord(
+            resource, diffData, diffRecord[this.options.resourceColumns.recordIdColumnName], connector
+          );
+        } else if (action === AllowedActionsEnum.delete) {
+          recordUpdateResult = await this.deleteRecord(
+            resource, diffRecord[this.options.resourceColumns.recordIdColumnName], connector
+          );
+        }
+        if (recordUpdateResult?.error) {
+          console.error('Error applying approved changes:', recordUpdateResult);
+          return { status: 500, error: `Failed to apply approved changes: ${recordUpdateResult.error}` };
+        }
+
+        let afterSaveResp;
+        if (action === AllowedActionsEnum.create) {
+          const newRecord = recordUpdateResult.createdRecord;
+          afterSaveResp = await this.callAfterSaveHooks(
+            resource, action as AllowedActionsEnum, newRecord, adminUser, 
+            diffRecord[this.options.resourceColumns.recordIdColumnName],
+            //@ts-ignore
+            newRecord, {}, this.adminforth, { body }
+          );
+        } else if (action === AllowedActionsEnum.edit) {
+          const newRecord = diffData['newRecord'];
+          const oldRecord = await this.adminforth.connectors[resource.dataSource].getRecordByPrimaryKey(
+            resource, diffRecord[this.options.resourceColumns.recordIdColumnName]
+          );
+          afterSaveResp = await this.callAfterSaveHooks(
+            resource, action as AllowedActionsEnum, newRecord, adminUser, 
+            //@ts-ignore
+            recordId, newRecord, oldRecord, this.adminforth, { body }
+          );
+        } else if (action === AllowedActionsEnum.delete) {
+          const newRecord = diffData['newRecord'];
+          afterSaveResp = await this.callAfterSaveHooks(
+            resource, action as AllowedActionsEnum, newRecord, adminUser, 
+            diffRecord[this.options.resourceColumns.recordIdColumnName],
+            //@ts-ignore
+            {}, diffData['oldRecord'], this.adminforth, { body }
+          );
+        }
+
+        if (afterSaveResp?.error) {
+          return { status: 500, error: `Failed to apply approved changes: ${afterSaveResp.error}` };
+        }
+      }
+    }
+    // the approval resource is not editable for users, the status is plugin bookkeeping
+    const r = await this.adminforth.resource(this.diffResource.resourceId)
+      .asSystem({
+        adminUser,
+        oldRecord: diffRecord,
+        //@ts-ignore
+        extra: { adminforth_plugin_crud_approve: { callingFromApprovalPlugin: true } },
+      })
+      .update(diffId, {
+        [this.options.resourceColumns.statusColumnName]: approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected,
+        [this.options.resourceColumns.responserIdColumnName]: adminUser.pk,
+      });
+    if (r.error) {
+      return { status: 500, error: `Failed to update diff record status: ${r.error}` };
+    }
+    if (beforeSaveResp?.error === 'Operation aborted by hook') {
+      return beforeSaveResp;
+    }
+    return { ok: true };
+  }
+
+  // one by one: every request runs the hooks of its own resource, a failed one does not stop the rest
+  bulkUpdateStatus = async (diffIds: (string | number)[], approved: boolean, adminUser: AdminUser, cookies: any) => {
+    const errors = new Set<string>();
+    let done = 0;
+    for (const diffId of diffIds) {
+      const { error } = await this.updateStatus({ diffId: `${diffId}`, approved, adminUser, body: { diffId, approved }, cookies });
+      if (error && error !== 'Operation aborted by hook') {
+        errors.add(error);
+      } else {
+        done++;
+      }
+    }
+    const verb = approved ? 'Approved' : 'Rejected';
+    const failed = errors.size ? ` Not ${verb.toLowerCase()}: ${[...errors].join('; ')}` : '';
+    // nothing changed: an error toast, the list stays; something changed: ok refreshes the list
+    if (!done) {
+      return { ok: false, error: `${verb} 0 of ${diffIds.length}.${failed}` };
+    }
+    return { ok: true, successMessage: `${verb} ${done} of ${diffIds.length}.${failed}` };
+  }
+
   setupEndpoints(server: IHttpServer): void {
     server.endpoint({
       method: 'POST',
       path: `/plugin/crud-approve/update-status`,
       handler: async ({ body, response, cookies, adminUser }) => {
-
-        const { diffId, approved, code } = body;
-        const diffRecord = await this.adminforth.resource(this.diffResource.resourceId).get(
-          Filters.EQ(this.options.resourceColumns.idColumnName, diffId),
-        )
-        if (!diffRecord) {
+        const { status, ...result } = await this.updateStatus({ diffId: body.diffId, approved: body.approved, adminUser, body, cookies });
+        if (status) {
           //@ts-ignore
-          response.status = 404;
-          return { error: 'Diff record not found' };
+          response.status = status;
         }
-
-        // the show permission of the approval resource is the approval permission, meta.record lets it
-        // depend on the request being reviewed, and the row scope of the approval resource applies too
-        try {
-          const visibleDiffRecord = await this.adminforth.resource(this.diffResource.resourceId)
-            .asUser(adminUser, { meta: { requestBody: body, pk: diffId, record: diffRecord } })
-            .get(Filters.EQ(this.options.resourceColumns.idColumnName, diffId));
-          if (!visibleDiffRecord) {
-            //@ts-ignore
-            response.status = 404;
-            return { error: 'Diff record not found' };
-          }
-        } catch (e) {
-          //@ts-ignore
-          response.status = 403;
-          return { error: (e as Error).message };
-        }
-
-        if (diffRecord[this.options.resourceColumns.statusColumnName] !== ApprovalStatusEnum.pending) {
-          //@ts-ignore
-          response.status = 400;
-          return { error: 'Diff record is not pending' };
-        }
-
-        const action = diffRecord[this.options.resourceColumns.actionColumnName];
-        const recordId = diffRecord[this.options.resourceColumns.recordIdColumnName];
-        const targetResource = this.adminforth.config.resources.find(
-          (res) => res.resourceId == diffRecord[this.options.resourceColumns.resourceIdColumnName]
-        );
-
-        // separation of duties: author of the request is not a valid reviewer for it
-        const requesterId = diffRecord[this.options.resourceColumns.userIdColumnName];
-        if (!this.options.allowSelfApproval
-            && requesterId !== undefined && requesterId !== null
-            && `${requesterId}` === `${adminUser.pk}`) {
-          //@ts-ignore
-          response.status = 403;
-          return { error: 'You can not approve or reject your own change request' };
-        }
-
-        let beforeSaveResp;
-        if (approved === true) {
-          if (!targetResource) {
-            //@ts-ignore
-            response.status = 404;
-            return {
-              error: `Resource ${diffRecord[this.options.resourceColumns.resourceIdColumnName]} not found`
-            };
-          }
-          const resource = targetResource;
-          const diffData = diffRecord[this.options.resourceColumns.dataColumnName];
-          const extra = diffRecord[this.options.resourceColumns.extraColumnName] || {};
-          extra.body = body;
-          extra.cookies = cookies;
-          let oldRecord = undefined;
-          if (action !== AllowedActionsEnum.create) {
-            oldRecord = await this.adminforth.connectors[resource.dataSource].getRecordByPrimaryKey(
-              resource, diffRecord[this.options.resourceColumns.recordIdColumnName]
-            );
-          }
-          beforeSaveResp = await this.callBeforeSaveHooks(
-            resource, action as AllowedActionsEnum, diffData['newRecord'], 
-            adminUser, diffRecord[this.options.resourceColumns.recordIdColumnName],
-            diffData['newRecord'], oldRecord, this.adminforth, extra
-          );
-          if (beforeSaveResp.error && beforeSaveResp.error !== 'Operation aborted by hook') {
-            //@ts-ignore
-            response.status = 500;
-            return { error: `Failed to apply approved changes: ${beforeSaveResp.error}` };
-          }
-          
-
-          if (beforeSaveResp.error !== 'Operation aborted by hook') {
-            let recordUpdateResult;
-            const connector = this.adminforth.connectors[resource.dataSource];
-            if (action === AllowedActionsEnum.create) {
-              recordUpdateResult = await this.createRecord(resource, diffData, adminUser);
-            } else if (action === AllowedActionsEnum.edit) {
-              recordUpdateResult = await this.editRecord(
-                resource, diffData, diffRecord[this.options.resourceColumns.recordIdColumnName], connector
-              );
-            } else if (action === AllowedActionsEnum.delete) {
-              recordUpdateResult = await this.deleteRecord(
-                resource, diffRecord[this.options.resourceColumns.recordIdColumnName], connector
-              );
-            }
-            if (recordUpdateResult?.error) {
-              //@ts-ignore
-              response.status = 500;
-              console.error('Error applying approved changes:', recordUpdateResult);
-              return { error: `Failed to apply approved changes: ${recordUpdateResult.error}` };
-            }
-
-            let afterSaveResp;
-            if (action === AllowedActionsEnum.create) {
-              const newRecord = recordUpdateResult.createdRecord;
-              afterSaveResp = await this.callAfterSaveHooks(
-                resource, action as AllowedActionsEnum, newRecord, adminUser, 
-                diffRecord[this.options.resourceColumns.recordIdColumnName],
-                //@ts-ignore
-                newRecord, {}, this.adminforth, { body }
-              );
-            } else if (action === AllowedActionsEnum.edit) {
-              const newRecord = diffData['newRecord'];
-              const oldRecord = await this.adminforth.connectors[resource.dataSource].getRecordByPrimaryKey(
-                resource, diffRecord[this.options.resourceColumns.recordIdColumnName]
-              );
-              afterSaveResp = await this.callAfterSaveHooks(
-                resource, action as AllowedActionsEnum, newRecord, adminUser, 
-                //@ts-ignore
-                recordId, newRecord, oldRecord, this.adminforth, { body }
-              );
-            } else if (action === AllowedActionsEnum.delete) {
-              const newRecord = diffData['newRecord'];
-              afterSaveResp = await this.callAfterSaveHooks(
-                resource, action as AllowedActionsEnum, newRecord, adminUser, 
-                diffRecord[this.options.resourceColumns.recordIdColumnName],
-                //@ts-ignore
-                {}, diffData['oldRecord'], this.adminforth, { body }
-              );
-            }
-
-            if (afterSaveResp?.error) {
-              //@ts-ignore
-              response.status = 500;
-              return { error: `Failed to apply approved changes: ${afterSaveResp.error}` };
-            }
-          }
-        }
-        // the approval resource is not editable for users, the status is plugin bookkeeping
-        const r = await this.adminforth.resource(this.diffResource.resourceId)
-          .asSystem({
-            adminUser,
-            oldRecord: diffRecord,
-            //@ts-ignore
-            extra: { adminforth_plugin_crud_approve: { callingFromApprovalPlugin: true } },
-          })
-          .update(diffId, {
-            [this.options.resourceColumns.statusColumnName]: approved ? ApprovalStatusEnum.approved : ApprovalStatusEnum.rejected,
-            [this.options.resourceColumns.responserIdColumnName]: adminUser.pk,
-          });
-        if (r.error) {
-          //@ts-ignore
-          response.status = 500;
-          return { error: `Failed to update diff record status: ${r.error}` };
-        }
-        if (beforeSaveResp?.error === 'Operation aborted by hook') {
-          return beforeSaveResp;
-        }
-        return { ok: true };
+        return result;
       }
     })
   }

@@ -11,7 +11,7 @@ const props = defineProps(['column', 'record', 'meta', 'resource', 'adminUser'])
     :record="record"
     :meta="meta"
     :resource="resource"
-    splitWhenWide
+    expanded
     @decided="router.push({ name: 'resource-list', params: { resourceId: resource.resourceId } })"
   />
 </template>

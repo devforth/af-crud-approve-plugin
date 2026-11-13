@@ -1,75 +1,59 @@
 <script setup>
-import { useCoreStore } from '@/stores/core';
-import { computed, ref, watch, defineAsyncComponent, onMounted, useTemplateRef } from 'vue';
-import { useElementSize } from '@vueuse/core';
+import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { callAdminForthApi } from '@/utils';
+import { formatDateTime } from '@/utils/dateUtils';
 import adminforth from '@/adminforth';
 import { Button } from '@/afcl';
+import { diffRows } from './diffRows';
 
-const DiffView = defineAsyncComponent(async () => {
-  // pure styles come without tailwind preflight, which would otherwise reset fonts of the whole SPA
-  await import("@git-diff-view/vue/styles/diff-view-pure.css");
-  const { DiffView } = await import("@git-diff-view/vue");
-  return DiffView;
-});
-
-// old and new records go side by side only when the container fits two JSON columns
-const SPLIT_MIN_WIDTH_PX = 768;
+const ROWS_COLLAPSED = 5;
 const PENDING_STATUS = 1;
+// written by the backend for backendOnly columns, see createApprovalRequest in index.ts
+const HIDDEN_VALUES = new Set(['<hidden value before>', '<hidden value after>']);
+const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
 
 const props = defineProps({
   record: Object,
   meta: Object,
   resource: Object,
-  // only for a container whose width does not follow its content, a table cell of auto layout would toggle the modes
-  splitWhenWide: Boolean,
+  // the show page lists every row, the list collapses long requests
+  expanded: Boolean,
 });
 const emit = defineEmits(['decided']);
 const { t } = useI18n();
-const coreStore = useCoreStore();
-const theme = computed(() => coreStore.theme === 'dark' ? 'dark' : 'light');
 
 const { oldRecord, newRecord } = props.record[props.meta.resourceColumns.dataColumnName];
-const oldContent = JSON.stringify(oldRecord, null, 2);
-const newContent = JSON.stringify(newRecord, null, 2);
-const hasChanges = oldContent !== newContent;
+const rows = diffRows(oldRecord, newRecord);
+const action = props.record[props.meta.resourceColumns.actionColumnName];
+const hasBefore = action !== 'create';
+const hasAfter = action !== 'delete';
 const isPending = props.record[props.meta.resourceColumns.statusColumnName] === PENDING_STATUS;
 
-const { width } = useElementSize(useTemplateRef('container'));
-const split = computed(() => props.splitWhenWide && width.value >= SPLIT_MIN_WIDTH_PX);
-
-const diffFile = ref();
-const diffModes = ref();
+const showAll = ref(props.expanded);
+const visibleRows = computed(() => showAll.value ? rows : rows.slice(0, ROWS_COLLAPSED));
 const sending = ref(null);
 
-function buildDiffLines() {
-  if (split.value) {
-    diffFile.value.buildSplitDiffLines();
-  } else {
-    diffFile.value.buildUnifiedDiffLines();
-  }
+function isPlaceholder(value) {
+  return value === undefined || value === null || value.length === 0 || HIDDEN_VALUES.has(value);
 }
 
-onMounted(async () => {
-  if (!hasChanges) {
-    return;
-  }
-  const { DiffModeEnum } = await import("@git-diff-view/vue");
-  const { generateDiffFile } = await import("@git-diff-view/file");
-  diffModes.value = DiffModeEnum;
-  const file = generateDiffFile('diff.json', oldContent, 'diff.json', newContent, 'json', 'json');
-  file.initTheme(theme.value);
-  file.init();
-  diffFile.value = file;
-  buildDiffLines();
-});
+function formatValue(value) {
+  if (HIDDEN_VALUES.has(value)) return t('Hidden');
+  if (isPlaceholder(value)) return t('Empty');
+  if (typeof value === 'boolean') return value ? t('Yes') : t('No');
+  if (Array.isArray(value)) return value.map(formatValue).join(', ');
+  if (typeof value === 'string' && ISO_DATETIME_RE.test(value)) return formatDateTime(value);
+  // a JSON value that changed its shape (text ↔ object) arrives whole
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
 
-watch([split, theme], () => {
-  if (!diffFile.value) return;
-  diffFile.value.initTheme(theme.value);
-  buildDiffLines();
-});
+function valueClass(value) {
+  return isPlaceholder(value)
+    ? 'text-lightInputPlaceholderText dark:text-darkInputPlaceholderText'
+    : 'text-lightShowTableBodyText dark:text-darkShowTableBodyText';
+}
 
 async function sendApproveRequest(approved) {
   sending.value = approved ? 'approve' : 'reject';
@@ -79,7 +63,7 @@ async function sendApproveRequest(approved) {
     body: {
       connectorId: props.resource.connectorId,
       resourceId: props.resource.resourceId,
-      action: props.record[props.meta.resourceColumns.actionColumnName],
+      action,
       recordId: props.record[props.meta.resourceColumns.recordIdColumnName],
       diffId: props.record[props.meta.resourceColumns.idColumnName],
       approved: approved
@@ -96,24 +80,59 @@ async function sendApproveRequest(approved) {
 </script>
 
 <template>
-  <div ref="container" class="af-crud-approve">
+  <div class="af-crud-approve">
     <div
-      v-if="diffFile"
-      class="af-crud-approve-diff overflow-hidden rounded-default border border-lightCardBorder dark:border-darkCardBorder"
+      v-if="rows.length"
+      class="af-crud-approve-diff overflow-x-auto rounded-default border border-lightCardBorder dark:border-darkCardBorder"
     >
-      <DiffView
-        :diff-file="diffFile"
-        :diff-view-mode="split ? diffModes.Split : diffModes.Unified"
-        :diff-view-theme="theme"
-        :diff-view-highlight="true"
-        :diff-view-wrap="true"
-        :diff-view-font-size="13"
-      />
+      <!-- fixed layout with a floor width: values wrap anywhere, yet the list column can't squeeze them to a few letters -->
+      <table class="w-full min-w-[28rem] table-fixed text-sm">
+        <thead>
+          <tr class="text-left text-xs text-lightInputIconColor dark:text-darkInputIconColor">
+            <th class="w-[35%] px-3 py-2 font-medium">{{ $t('Field') }}</th>
+            <th v-if="hasBefore" class="px-3 py-2 font-medium">{{ $t('Before') }}</th>
+            <th v-if="hasAfter" class="px-3 py-2 font-medium">{{ $t('After') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in visibleRows"
+            :key="row.path.join('.')"
+            class="align-top border-t border-lightShowTableBodyBorder dark:border-darkShowTableBodyBorder"
+          >
+            <td class="px-3 py-2 text-lightInputIconColor dark:text-darkInputIconColor">{{ row.path.join(' › ') }}</td>
+            <td
+              v-if="hasBefore"
+              class="af-crud-approve-before px-3 py-2 [overflow-wrap:anywhere] bg-lightDangerSoft dark:bg-darkDangerSoft"
+              :class="valueClass(row.before)"
+            >
+              {{ formatValue(row.before) }}
+            </td>
+            <td
+              v-if="hasAfter"
+              class="af-crud-approve-after px-3 py-2 [overflow-wrap:anywhere] bg-lightSuccessSoft dark:bg-darkSuccessSoft"
+              :class="valueClass(row.after)"
+            >
+              {{ formatValue(row.after) }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
-    <p v-else-if="!hasChanges" class="text-lightInputPlaceholderText dark:text-darkInputPlaceholderText">
+    <p v-else class="text-lightInputPlaceholderText dark:text-darkInputPlaceholderText">
       {{ $t('No changes to display') }}
     </p>
-    <div v-if="isPending" class="af-crud-approve-actions mt-4 flex gap-2">
+    <Button
+      v-if="!expanded && rows.length > ROWS_COLLAPSED"
+      class="af-crud-approve-show-more mt-2"
+      variant="secondary"
+      size="sm"
+      @click.stop="showAll = !showAll"
+    >
+      {{ showAll ? $t('Show less') : $t('Show {count} more', { count: rows.length - ROWS_COLLAPSED }) }}
+    </Button>
+    <!-- the list row opens the show page on click -->
+    <div v-if="isPending" class="af-crud-approve-actions mt-4 flex gap-2" @click.stop>
       <Button
         class="af-crud-approve-approve-button flex-1"
         :loader="sending === 'approve'"
@@ -134,59 +153,3 @@ async function sendApproveRequest(approved) {
     </div>
   </div>
 </template>
-
-<style>
-/* the diff view sets Menlo inline on the tables of both modes */
-.af-crud-approve-diff .diff-table-scroll-container,
-.af-crud-approve-diff .diff-table-wrapper {
-  font-family: theme('fontFamily.mono') !important;
-}
-
-.af-crud-approve-diff .diff-tailwindcss-wrapper[data-theme="light"] .diff-style-root {
-  --diff-border--: theme('colors.lightCardBorder');
-  --diff-plain-content--: theme('colors.lightCardBackground');
-  --diff-plain-lineNumber--: theme('colors.lightCardBackground');
-  --diff-plain-lineNumber-color--: theme('colors.lightInputPlaceholderText');
-  --diff-expand-content--: theme('colors.lightCardBackgroundHover');
-  --diff-expand-lineNumber--: theme('colors.lightCardBackgroundHover');
-  --diff-expand-lineNumber-color--: theme('colors.lightInputPlaceholderText');
-  --diff-empty-content--: theme('colors.lightCardBackgroundHover');
-  --diff-hunk-content--: theme('colors.lightCardBackgroundHover');
-  --diff-hunk-lineNumber--: theme('colors.lightCardBackgroundHover');
-  --diff-hunk-lineNumber-hover--: theme('colors.lightPrimary');
-  --diff-hunk-content-color--: theme('colors.lightShowTableUnderHeadingText');
-  --diff-add-widget--: theme('colors.lightPrimary');
-  --diff-add-widget-color--: theme('colors.lightPrimaryContrast');
-  --diff-add-content--: theme('colors.lightSuccessSoft');
-  --diff-add-lineNumber--: theme('colors.lightSuccessSoft');
-  --diff-add-content-highlight--: theme('colors.lightSuccessBorder');
-  --diff-del-content--: theme('colors.lightDangerSoft');
-  --diff-del-lineNumber--: theme('colors.lightDangerSoft');
-  --diff-del-content-highlight--: theme('colors.lightDangerBorder');
-  color: theme('colors.lightShowTableBodyText');
-}
-
-.af-crud-approve-diff .diff-tailwindcss-wrapper[data-theme="dark"] .diff-style-root {
-  --diff-border--: theme('colors.darkCardBorder');
-  --diff-plain-content--: theme('colors.darkCardBackground');
-  --diff-plain-lineNumber--: theme('colors.darkCardBackground');
-  --diff-plain-lineNumber-color--: theme('colors.darkInputPlaceholderText');
-  --diff-expand-content--: theme('colors.darkCardBackgroundHover');
-  --diff-expand-lineNumber--: theme('colors.darkCardBackgroundHover');
-  --diff-expand-lineNumber-color--: theme('colors.darkInputPlaceholderText');
-  --diff-empty-content--: theme('colors.darkCardBackgroundHover');
-  --diff-hunk-content--: theme('colors.darkCardBackgroundHover');
-  --diff-hunk-lineNumber--: theme('colors.darkCardBackgroundHover');
-  --diff-hunk-lineNumber-hover--: theme('colors.darkPrimary');
-  --diff-hunk-content-color--: theme('colors.darkShowTableUnderHeadingText');
-  --diff-add-widget--: theme('colors.darkPrimary');
-  --diff-add-widget-color--: theme('colors.darkPrimaryContrast');
-  --diff-add-content--: theme('colors.darkSuccessSoft');
-  --diff-add-lineNumber--: theme('colors.darkSuccessSoft');
-  --diff-add-content-highlight--: theme('colors.darkSuccessBorder');
-  --diff-del-content--: theme('colors.darkDangerSoft');
-  --diff-del-lineNumber--: theme('colors.darkDangerSoft');
-  --diff-del-content-highlight--: theme('colors.darkDangerBorder');
-  color: theme('colors.darkShowTableBodyText');
-}
-</style>
