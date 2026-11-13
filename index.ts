@@ -1,4 +1,4 @@
-import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer } from "adminforth";
+import { ActionCheckSource, AdminForthPlugin, AdminForthSortDirections, Filters, IAdminForthDataSourceConnectorBase, IHttpServer, suggestIfTypo } from "adminforth";
 import { IAdminForth, AdminForthDataTypes, AdminForthResource, AllowedActionsEnum, HttpExtra, AdminUser } from "adminforth";
 import { AllowedForReviewActionsEnum, ApprovalStatusEnum, type PluginOptions } from './types.js';
 
@@ -165,7 +165,20 @@ export default class CRUDApprovePlugin extends AdminForthPlugin {
   }
 
   validateConfigAfterDiscover(adminforth: IAdminForth, resourceConfig: AdminForthResource) {
-    // optional method where you can safely check field types after database discovery was performed
+    // a typo in diffTable would silently change nothing, so name it at startup
+    for (const [resourceId, { fieldsOrder = [] }] of Object.entries(this.options.diffTable ?? {})) {
+      const resource = adminforth.config.resources.find((res) => res.resourceId === resourceId);
+      if (!resource) {
+        const similar = suggestIfTypo(adminforth.config.resources.map((res) => res.resourceId), resourceId);
+        throw new Error(`CRUDApprovePlugin diffTable: resource "${resourceId}" not found.${similar ? ` Did you mean "${similar}"?` : ''}`);
+      }
+      const columnNames = resource.columns.map((column) => column.name);
+      // keys inside JSON ("reward.type") are unknown before requests come, only the column part is checked
+      for (const name of fieldsOrder.map((entry) => entry.split('.')[0]).filter((name) => !columnNames.includes(name))) {
+        const similar = suggestIfTypo(columnNames, name);
+        throw new Error(`CRUDApprovePlugin diffTable.${resourceId}.fieldsOrder: column "${name}" not found.${similar ? ` Did you mean "${similar}"?` : ''}`);
+      }
+    }
   }
 
   instanceUniqueRepresentation(pluginOptions: any) : string {

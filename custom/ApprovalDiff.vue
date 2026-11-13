@@ -7,7 +7,7 @@ import adminforth from '@/adminforth';
 import { Button } from '@/afcl';
 import { diffRows } from './diffRows';
 
-const ROWS_COLLAPSED = 5;
+const DEFAULT_LIST_ROWS_LIMIT = 5;
 const PENDING_STATUS = 1;
 // written by the backend for backendOnly columns, see createApprovalRequest in index.ts
 const HIDDEN_VALUES = new Set(['<hidden value before>', '<hidden value after>']);
@@ -24,14 +24,16 @@ const emit = defineEmits(['decided']);
 const { t } = useI18n();
 
 const { oldRecord, newRecord } = props.record[props.meta.resourceColumns.dataColumnName];
-const rows = diffRows(oldRecord, newRecord);
+const tableOptions = props.meta.diffTable?.[props.record[props.meta.resourceColumns.resourceIdColumnName]];
+const rows = diffRows(oldRecord, newRecord, tableOptions?.fieldsOrder);
+const listRowsLimit = tableOptions?.listRowsLimit ?? DEFAULT_LIST_ROWS_LIMIT;
 const action = props.record[props.meta.resourceColumns.actionColumnName];
 const hasBefore = action !== 'create';
 const hasAfter = action !== 'delete';
 const isPending = props.record[props.meta.resourceColumns.statusColumnName] === PENDING_STATUS;
 
 const showAll = ref(props.expanded);
-const visibleRows = computed(() => showAll.value ? rows : rows.slice(0, ROWS_COLLAPSED));
+const visibleRows = computed(() => showAll.value ? rows : rows.slice(0, listRowsLimit));
 const sending = ref(null);
 
 function isPlaceholder(value) {
@@ -123,13 +125,13 @@ async function sendApproveRequest(approved) {
       {{ $t('No changes to display') }}
     </p>
     <Button
-      v-if="!expanded && rows.length > ROWS_COLLAPSED"
+      v-if="!expanded && rows.length > listRowsLimit"
       class="af-crud-approve-show-more mt-2"
       variant="secondary"
       size="sm"
       @click.stop="showAll = !showAll"
     >
-      {{ showAll ? $t('Show less') : $t('Show {count} more', { count: rows.length - ROWS_COLLAPSED }) }}
+      {{ showAll ? $t('Show less') : $t('Show {count} more', { count: rows.length - listRowsLimit }) }}
     </Button>
     <!-- the list row opens the show page on click -->
     <div v-if="isPending" class="af-crud-approve-actions mt-4 flex gap-2" @click.stop>
